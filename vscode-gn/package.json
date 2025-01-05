@@ -1,0 +1,71 @@
+{
+  "name": "vscode-gn",
+  "displayName": "GN",
+  "description": "Language Support for GN",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/google/gn-language-server"
+  },
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "gn",
+        "aliases": [
+          "GN",
+          "gn"
+        ],
+        "extensions": [
+          ".gni",
+          ".gn"
+        ],
+        "filenames": [
+          ".gn"
+        ],
+        "configuration": "./languages/gn.language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gn",
+        "scopeName": "source.gn",
+        "path": "./syntaxes/gn.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "npm run build-extension && npm run build-server",
+    "build-extension": "webpack",
+    "build-server": "cargo build --release && bash -c 'cp ../target/${CARGO_BUILD_TARGET:-.}/release/gn-language-server${APPDATA:+.exe} dist/'",
+    "build-tests": "tsc -p . --outDir out",
+    "lint": "eslint src",
+    "test": "xvfb-run vscode-test",
+    "pretest": "npm run build-tests && npm run build && npm run lint",
+    "vscode:prepublish": "npm ci && npm run build"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.96.0",
+    "@typescript-eslint/eslint-plugin": "^8.17.0",
+    "@typescript-eslint/parser": "^8.17.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "eslint": "^9.16.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.7.2",
+    "webpack": "^5.95.0",
+    "webpack-cli": "^5.1.4"
+  }
+}
