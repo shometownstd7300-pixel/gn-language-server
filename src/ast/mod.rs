@@ -22,6 +22,10 @@ pub trait Node<'i> {
     fn children(&self) -> Vec<&dyn Node>;
     fn span(&self) -> Span<'i>;
 
+    fn as_statement(&self) -> Option<&Statement<'i>> {
+        None
+    }
+
     fn as_identifier(&self) -> Option<&Identifier<'i>> {
         None
     }
@@ -111,6 +115,10 @@ impl<'i> Node<'i> for Statement<'i> {
             Statement::Unknown(unknown_statement) => unknown_statement.span,
             Statement::UnmatchedBrace(unmatched_brace) => unmatched_brace.span,
         }
+    }
+
+    fn as_statement(&self) -> Option<&Statement<'i>> {
+        Some(self)
     }
 }
 
@@ -464,6 +472,16 @@ pub enum AssignOp {
     Assign,
     AddAssign,
     SubAssign,
+}
+
+impl std::fmt::Display for AssignOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssignOp::Assign => write!(f, "="),
+            AssignOp::AddAssign => write!(f, "+="),
+            AssignOp::SubAssign => write!(f, "-="),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

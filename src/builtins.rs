@@ -35,3 +35,13 @@ impl BuiltinSymbols {
 }
 
 pub const BUILTINS: BuiltinSymbols = include!("builtins.gen.rsi");
+
+/**
+ * Returns true if the given function with a block does not define a target.
+ */
+pub fn is_no_target_call(name: &str) -> bool {
+    matches!(
+        name,
+        "declare_args" | "template" | "foreach" | "set_defaults"
+    )
+}

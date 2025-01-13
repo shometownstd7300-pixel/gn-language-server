@@ -152,20 +152,30 @@ fn convert_expr(pair: Pair<Rule>) -> Expr {
         .op(Op::infix(Rule::or, Assoc::Left));
     pratt_parser
         .map_primary(|pair| Expr::Primary(convert_primary(pair)))
-        .map_prefix(|op, rhs| match op.as_rule() {
-            Rule::not => Expr::Unary(UnaryExpr {
-                op: UnaryOp::Not,
-                expr: Box::new(rhs),
-                span: op.as_span(),
-            }),
-            _ => unreachable!(),
+        .map_prefix(|op, rhs| {
+            let span = Span::new(
+                op.as_span().get_input(),
+                op.as_span().start(),
+                rhs.span().end(),
+            )
+            .unwrap();
+            match op.as_rule() {
+                Rule::not => Expr::Unary(UnaryExpr {
+                    op: UnaryOp::Not,
+                    expr: Box::new(rhs),
+                    span,
+                }),
+                _ => unreachable!(),
+            }
         })
         .map_infix(|lhs, op, rhs| {
+            let span =
+                Span::new(lhs.span().get_input(), lhs.span().start(), rhs.span().end()).unwrap();
             Expr::Binary(BinaryExpr {
                 lhs: Box::new(lhs),
                 op: rule_to_binary_op(op.as_rule()),
                 rhs: Box::new(rhs),
-                span: op.as_span(),
+                span,
             })
         })
         .parse(pairs)

@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use tower_lsp::{lsp_types::*, Client, LanguageServer, LspService, Server};
 
 use crate::{
-    analyze::{analyze_links, analyze_targets, analyze_templates, Link},
+    analyze::{analyze_links, analyze_symbols, analyze_targets, analyze_templates, Link},
     ast::{Identifier, Node},
     builtins::BUILTINS,
     parse::{ParsedFile, RecursiveParser},
@@ -339,34 +339,7 @@ impl LanguageServer for Backend {
             .parse(&path)
             .map_err(into_rpc_error)?;
 
-        let templates = analyze_templates(&file);
-        let targets = analyze_targets(&file);
-
-        #[allow(deprecated)]
-        let symbols = templates
-            .into_iter()
-            .map(|template| DocumentSymbol {
-                name: template.name.clone(),
-                detail: Some(format!("template(\"{}\")", template.name)),
-                kind: SymbolKind::CLASS,
-                range: template.block.range,
-                selection_range: template.header.range,
-                tags: None,
-                deprecated: None,
-                children: None,
-            })
-            .chain(targets.into_iter().map(|target| DocumentSymbol {
-                name: target.name.clone(),
-                detail: Some(format!("{}(\"{}\")", target.kind, target.name)),
-                kind: SymbolKind::VARIABLE,
-                range: target.block.range,
-                selection_range: target.header.range,
-                tags: None,
-                deprecated: None,
-                children: None,
-            }))
-            .collect();
-
+        let symbols = analyze_symbols(&file);
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 }
