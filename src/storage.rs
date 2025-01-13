@@ -19,6 +19,8 @@ use std::{
     time::SystemTime,
 };
 
+use crate::util::LineIndex;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DocumentVersion {
     OnDisk { modified: SystemTime },
@@ -28,7 +30,8 @@ pub enum DocumentVersion {
 #[derive(Clone)]
 pub struct Document {
     pub path: PathBuf,
-    pub data: Vec<u8>,
+    pub data: String,
+    pub line_index: LineIndex<'static>,
     pub version: DocumentVersion,
 }
 
@@ -56,21 +59,30 @@ impl DocumentStorage {
         if let Some(doc) = self.memory_docs.get(path) {
             return Ok(doc.clone());
         }
-        let data = fs_err::read(path)?;
+        let data = fs_err::read_to_string(path)?;
+        let line_index = LineIndex::new(&data);
+        // SAFETY: line_index is backed by data, which is guaranteed to be valid for the lifetime of Document.
+        let line_index = unsafe { std::mem::transmute::<LineIndex, LineIndex>(line_index) };
         let version = self.read_version(path)?;
         Ok(Arc::new(Document {
             path: path.to_path_buf(),
             data,
+            line_index,
             version,
         }))
     }
 
-    pub fn load_to_memory(&mut self, path: &Path, data: &[u8], revision: i32) {
+    pub fn load_to_memory(&mut self, path: &Path, data: &str, revision: i32) {
+        let data = data.to_string();
+        let line_index = LineIndex::new(&data);
+        // SAFETY: line_index is backed by data, which is guaranteed to be valid for the lifetime of Document.
+        let line_index = unsafe { std::mem::transmute::<LineIndex, LineIndex>(line_index) };
         self.memory_docs.insert(
             path.to_path_buf(),
             Arc::new(Document {
                 path: path.to_path_buf(),
-                data: data.to_vec(),
+                data,
+                line_index,
                 version: DocumentVersion::InMemory { revision },
             }),
         );

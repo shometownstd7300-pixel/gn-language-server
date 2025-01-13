@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod analyze;
+mod ast;
 mod builtins;
 mod parse;
 mod server;

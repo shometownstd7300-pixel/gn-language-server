@@ -8,13 +8,12 @@ anyhow = "1.0.95"
 either = "1.13.0"
 fs-err = "3.0.0"
 itertools = "0.14.0"
+pest = "2.7.15"
+pest_derive = "2.7.15"
 serde = "1.0.217"
 serde_json = "1.0.134"
-streaming-iterator = "0.1.9"
 tokio = { version = "1.42.0", features = ["full"] }
 tower-lsp = "0.20.0"
-tree-sitter = "0.24.6"
-tree-sitter-gn = { git = "https://github.com/nya3jp/tree-sitter-gn.git", branch = "ts0.24" }
 
 [build-dependencies]
 cc = "1.2.7"

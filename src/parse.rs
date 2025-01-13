@@ -16,40 +16,14 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::ErrorKind,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
-use streaming_iterator::StreamingIterator;
-use tree_sitter::{Language, Parser, Query, QueryCursor, Tree};
-
-use crate::storage::{Document, DocumentStorage};
-
-static GN_LANGUAGE: OnceLock<Language> = OnceLock::new();
-
-pub fn gn_language() -> &'static Language {
-    GN_LANGUAGE.get_or_init(tree_sitter_gn::language)
-}
-
-struct Queries {
-    pub imports: Query,
-}
-
-impl Queries {
-    pub fn new() -> Self {
-        let imports = Query::new(
-            gn_language(),
-            r#"
-            (import_statement
-                (primary_expression
-                    (string
-                        (string_content) @import-path)))
-        "#,
-        )
-        .unwrap();
-
-        Self { imports }
-    }
-}
+use crate::{
+    ast::{parse, Block},
+    storage::{Document, DocumentStorage},
+    util::parse_simple_literal,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorkspaceContext {
@@ -84,25 +58,27 @@ impl WorkspaceContext {
 pub struct ParsedFile {
     pub document: Arc<Document>,
     pub workspace: WorkspaceContext,
-    pub tree: Tree,
+    pub root: Block<'static>,
     pub imports: Vec<PathBuf>,
+}
+
+fn scan_imports<'i>(root: &'i Block) -> impl Iterator<Item = &'i str> {
+    root.top_level_calls().filter_map(|call| {
+        if call.function.name != "import" {
+            return None;
+        }
+        let string = call.args.first().and_then(|arg| arg.as_primary_string())?;
+        parse_simple_literal(&string.raw_value)
+    })
 }
 
 pub struct SimpleParser {
     storage: DocumentStorage,
-    parser: Parser,
-    queries: Queries,
 }
 
 impl SimpleParser {
     pub fn new(storage: DocumentStorage) -> Self {
-        let mut parser = Parser::new();
-        parser.set_language(gn_language()).unwrap();
-        Self {
-            storage,
-            parser,
-            queries: Queries::new(),
-        }
+        Self { storage }
     }
 
     pub fn storage_mut(&mut self) -> &mut DocumentStorage {
@@ -113,38 +89,22 @@ impl SimpleParser {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        old_tree: Option<&Tree>,
     ) -> std::io::Result<Arc<ParsedFile>> {
-        let current_dir = path.parent().unwrap();
-
         let document = self.storage.read(path)?;
-        let tree = self.parser.parse(&document.data, old_tree).unwrap();
+        let root = parse(&document.data);
 
-        let imports: Vec<PathBuf> = {
-            let mut cursor = QueryCursor::new();
-            let mut matches = cursor.matches(
-                &self.queries.imports,
-                tree.root_node(),
-                document.data.as_slice(),
-            );
-            let mut imports = Vec::new();
-            while let Some(m) = matches.next() {
-                let name = m
-                    .nodes_for_capture_index(0)
-                    .next()
-                    .unwrap()
-                    .utf8_text(&document.data)
-                    .unwrap();
-                let path = workspace.resolve_path(name, current_dir);
-                imports.push(path);
-            }
-            imports
-        };
+        let current_dir = path.parent().unwrap();
+        let imports: Vec<PathBuf> = scan_imports(&root)
+            .map(|name| workspace.resolve_path(name, current_dir))
+            .collect();
 
+        // SAFETY: root's contents are backed by document.data that are guaranteed to have
+        // the identical lifetime because ParsedFile in Arc is immutable.
+        let root = unsafe { std::mem::transmute::<Block, Block>(root) };
         Ok(Arc::new(ParsedFile {
             document,
             workspace: workspace.clone(),
-            tree,
+            root,
             imports,
         }))
     }
@@ -181,7 +141,7 @@ impl CachedParser {
             }
         }
 
-        let new_file = self.parser.parse(path, workspace, None)?;
+        let new_file = self.parser.parse(path, workspace)?;
         self.cache.insert(path.to_path_buf(), new_file.clone());
         Ok(new_file)
     }

@@ -1,0 +1,380 @@
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use itertools::Itertools;
+use pest::{
+    iterators::Pair,
+    pratt_parser::{Assoc, Op, PrattParser},
+    Parser,
+};
+
+use crate::ast::*;
+
+#[derive(pest_derive::Parser)]
+#[grammar = "ast/gn.pest"]
+struct GnParser;
+
+fn rule_to_binary_op(rule: Rule) -> BinaryOp {
+    match rule {
+        Rule::add => BinaryOp::Add,
+        Rule::sub => BinaryOp::Sub,
+        Rule::ge => BinaryOp::Ge,
+        Rule::gt => BinaryOp::Gt,
+        Rule::le => BinaryOp::Le,
+        Rule::lt => BinaryOp::Lt,
+        Rule::eq => BinaryOp::Eq,
+        Rule::ne => BinaryOp::Ne,
+        Rule::and => BinaryOp::And,
+        Rule::or => BinaryOp::Or,
+        _ => unreachable!(),
+    }
+}
+
+fn convert_identifier(pair: Pair<Rule>) -> Identifier {
+    assert!(matches!(pair.as_rule(), Rule::identifier));
+    Identifier {
+        name: pair.as_str(),
+        span: pair.as_span(),
+    }
+}
+
+fn convert_integer(pair: Pair<Rule>) -> IntegerLiteral {
+    assert!(matches!(pair.as_rule(), Rule::integer));
+    IntegerLiteral {
+        value: pair.as_str().parse().unwrap(),
+        span: pair.as_span(),
+    }
+}
+
+fn convert_string(pair: Pair<Rule>) -> StringLiteral {
+    assert!(matches!(pair.as_rule(), Rule::string));
+    let span = pair.as_span();
+    let pair = pair.into_inner().exactly_one().unwrap();
+    assert!(matches!(pair.as_rule(), Rule::string_content));
+    let raw_value = pair.as_str().to_string();
+    StringLiteral { raw_value, span }
+}
+
+fn convert_list(pair: Pair<Rule>) -> ListLiteral {
+    let span = pair.as_span();
+    let values = convert_expr_list(pair);
+    ListLiteral { values, span }
+}
+
+fn convert_array_access(pair: Pair<Rule>) -> ArrayAccess {
+    assert!(matches!(pair.as_rule(), Rule::array_access));
+    let span = pair.as_span();
+    let (array_pair, index_pair) = pair.into_inner().collect_tuple().unwrap();
+    let array = convert_identifier(array_pair);
+    let index = convert_expr(index_pair);
+    ArrayAccess {
+        array,
+        index: Box::new(index),
+        span,
+    }
+}
+
+fn convert_scope_access(pair: Pair<Rule>) -> ScopeAccess {
+    assert!(matches!(pair.as_rule(), Rule::scope_access));
+    let span = pair.as_span();
+    let (scope_pair, member_pair) = pair.into_inner().collect_tuple().unwrap();
+    let scope = convert_identifier(scope_pair);
+    let member = convert_identifier(member_pair);
+    ScopeAccess {
+        scope,
+        member,
+        span,
+    }
+}
+
+fn convert_block(pair: Pair<Rule>) -> Block {
+    assert!(matches!(pair.as_rule(), Rule::block));
+    let span = pair.as_span();
+    let mut comments: Vec<_> = Vec::new();
+    let statements = pair
+        .into_inner()
+        .filter_map(|pair| match pair.as_rule() {
+            Rule::statement => Some(convert_statement(pair, std::mem::take(&mut comments))),
+            Rule::error => Some(Statement::Unknown(UnknownStatement {
+                text: pair.as_str(),
+                span: pair.as_span(),
+            })),
+            Rule::comment => {
+                comments.push(pair.into_inner().exactly_one().unwrap().as_str());
+                None
+            }
+            _ => unreachable!(),
+        })
+        .collect();
+    Block { statements, span }
+}
+
+fn convert_primary(pair: Pair<Rule>) -> PrimaryExpr {
+    match pair.as_rule() {
+        Rule::identifier => PrimaryExpr::Identifier(convert_identifier(pair)),
+        Rule::integer => PrimaryExpr::Integer(convert_integer(pair)),
+        Rule::string => PrimaryExpr::String(convert_string(pair)),
+        Rule::call => PrimaryExpr::Call(convert_call(pair, Vec::new())),
+        Rule::array_access => PrimaryExpr::ArrayAccess(convert_array_access(pair)),
+        Rule::scope_access => PrimaryExpr::ScopeAccess(convert_scope_access(pair)),
+        Rule::block => PrimaryExpr::Block(convert_block(pair)),
+        Rule::expr => PrimaryExpr::ParenExpr(Box::new(convert_expr(pair))),
+        Rule::expr_list => PrimaryExpr::List(convert_list(pair)),
+        _ => unreachable!(),
+    }
+}
+
+fn convert_expr(pair: Pair<Rule>) -> Expr {
+    assert!(matches!(pair.as_rule(), Rule::expr));
+    let pairs = pair.into_inner();
+
+    // TODO: Cache PrattParser
+    let pratt_parser = PrattParser::new()
+        .op(Op::prefix(Rule::not))
+        .op(Op::infix(Rule::add, Assoc::Left) | Op::infix(Rule::sub, Assoc::Left))
+        .op(Op::infix(Rule::ge, Assoc::Left)
+            | Op::infix(Rule::gt, Assoc::Left)
+            | Op::infix(Rule::le, Assoc::Left)
+            | Op::infix(Rule::lt, Assoc::Left))
+        .op(Op::infix(Rule::eq, Assoc::Left) | Op::infix(Rule::ne, Assoc::Left))
+        .op(Op::infix(Rule::and, Assoc::Left))
+        .op(Op::infix(Rule::or, Assoc::Left));
+    pratt_parser
+        .map_primary(|pair| Expr::Primary(convert_primary(pair)))
+        .map_prefix(|op, rhs| match op.as_rule() {
+            Rule::not => Expr::Unary(UnaryExpr {
+                op: UnaryOp::Not,
+                expr: Box::new(rhs),
+                span: op.as_span(),
+            }),
+            _ => unreachable!(),
+        })
+        .map_infix(|lhs, op, rhs| {
+            Expr::Binary(BinaryExpr {
+                lhs: Box::new(lhs),
+                op: rule_to_binary_op(op.as_rule()),
+                rhs: Box::new(rhs),
+                span: op.as_span(),
+            })
+        })
+        .parse(pairs)
+}
+
+fn convert_expr_list(pair: Pair<Rule>) -> Vec<Expr> {
+    assert!(matches!(pair.as_rule(), Rule::expr_list));
+    pair.into_inner().map(convert_expr).collect()
+}
+
+fn convert_lvalue(pair: Pair<Rule>) -> LValue {
+    assert!(matches!(pair.as_rule(), Rule::lvalue));
+    let pair = pair.into_inner().exactly_one().unwrap();
+    match pair.as_rule() {
+        Rule::identifier => LValue::Identifier(convert_identifier(pair)),
+        Rule::array_access => LValue::ArrayAccess(convert_array_access(pair)),
+        Rule::scope_access => LValue::ScopeAccess(convert_scope_access(pair)),
+        _ => unreachable!(),
+    }
+}
+
+fn convert_assign_op(pair: Pair<Rule>) -> AssignOp {
+    assert!(matches!(pair.as_rule(), Rule::assign_op));
+    match pair.as_str() {
+        "=" => AssignOp::Assign,
+        "+=" => AssignOp::AddAssign,
+        "-=" => AssignOp::SubAssign,
+        _ => unreachable!(),
+    }
+}
+
+fn convert_assignment(pair: Pair<Rule>) -> Assignment {
+    assert!(matches!(pair.as_rule(), Rule::assignment));
+    let span = pair.as_span();
+    let (lvalue_pair, assign_op_pair, expr_pair) = pair.into_inner().collect_tuple().unwrap();
+    let lvalue = convert_lvalue(lvalue_pair);
+    let assign_op = convert_assign_op(assign_op_pair);
+    let expr = convert_expr(expr_pair);
+    Assignment {
+        lvalue,
+        op: assign_op,
+        rvalue: Box::new(expr),
+        span,
+    }
+}
+
+fn convert_call<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Call<'i> {
+    assert!(matches!(pair.as_rule(), Rule::call));
+    let span = pair.as_span();
+    let mut pairs = pair.into_inner();
+    let function = convert_identifier(pairs.next().unwrap());
+    let args = convert_expr_list(pairs.next().unwrap());
+    let block = pairs.next().map(convert_block);
+    Call {
+        comments: if comments.is_empty() {
+            None
+        } else {
+            Some(Comments {
+                text: comments.join("\n"),
+            })
+        },
+        function,
+        args,
+        block,
+        span,
+    }
+}
+
+fn convert_condition(pair: Pair<Rule>) -> Condition {
+    assert!(matches!(pair.as_rule(), Rule::condition));
+    let span = pair.as_span();
+    let mut pairs = pair.into_inner();
+
+    let condition = convert_expr(pairs.next().unwrap());
+    let then_block = convert_block(pairs.next().unwrap());
+    let else_block = match pairs.next() {
+        Some(pair) if matches!(pair.as_rule(), Rule::condition) => {
+            Some(Either::Left(Box::new(convert_condition(pair))))
+        }
+        Some(pair) if matches!(pair.as_rule(), Rule::block) => {
+            Some(Either::Right(convert_block(pair)))
+        }
+        Some(pair) => unreachable!("{:?}", pair),
+        None => None,
+    };
+
+    Condition {
+        condition: Box::new(condition),
+        then_block,
+        else_block,
+        span,
+    }
+}
+
+fn convert_statement<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Statement<'i> {
+    assert!(matches!(pair.as_rule(), Rule::statement));
+    let pair = pair.into_inner().exactly_one().unwrap();
+    match pair.as_rule() {
+        Rule::assignment => Statement::Assignment(convert_assignment(pair)),
+        Rule::call => Statement::Call(convert_call(pair, comments)),
+        Rule::condition => Statement::Condition(convert_condition(pair)),
+        _ => unreachable!(),
+    }
+}
+
+fn convert_file(pair: Pair<Rule>) -> Block {
+    assert!(matches!(pair.as_rule(), Rule::file));
+    let span = pair.as_span();
+    let mut comments: Vec<_> = Vec::new();
+    let statements = pair
+        .into_inner()
+        .filter_map(|pair| match pair.as_rule() {
+            Rule::statement => Some(convert_statement(pair, std::mem::take(&mut comments))),
+            Rule::error => Some(Statement::Unknown(UnknownStatement {
+                text: pair.as_str(),
+                span: pair.as_span(),
+            })),
+            Rule::unmatched_brace => Some(Statement::UnmatchedBrace(UnmatchedBrace {
+                span: pair.as_span(),
+            })),
+            Rule::comment => {
+                comments.push(pair.into_inner().exactly_one().unwrap().as_str());
+                None
+            }
+            Rule::EOI => None,
+            _ => unreachable!(),
+        })
+        .collect();
+    Block { statements, span }
+}
+
+pub fn parse(input: &str) -> Block {
+    let file_pair = GnParser::parse(Rule::file, input)
+        .unwrap()
+        .exactly_one()
+        .unwrap();
+    convert_file(file_pair)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smoke() {
+        // Empty
+        parse("");
+        parse(" \r\n\t");
+
+        // Assignment
+        parse("a = 1");
+        parse("a += 1");
+        parse("a -= 1");
+        parse("a[1] = 1");
+        parse("a.b = 1");
+
+        // Conditional
+        parse("if (true) {}");
+        parse("if (true) { a = 1 }");
+        parse("if (true) {} else {}");
+        parse("if (true) { a = 1 } else { a = 2 }");
+        parse("if (true) {} else if (true) {}");
+        parse("if (true) { a = 1 } else if (true) { a = 2 }");
+        parse("if (true) {} else if (true) {} else {}");
+        parse("if (true) { a = 1 } else if (true) { a = 2 } else { a = 3 }");
+
+        // Call
+        parse("assert(true)");
+        parse("declare_args() {}");
+        parse("declare_args() { a = 1 }");
+        parse("template(\"foo\") {}");
+        parse("template(\"foo\") { bar(target_name) }");
+
+        // Expressions
+        parse("a = 1");
+        parse("a = b[1]");
+        parse("a = b.c");
+        parse("a = 1 + 2 * 3");
+        parse("a = 1 == 2");
+        parse("a = 1 <= 2");
+        parse("a = true && false || !false");
+        parse(r#"a = "foo\"bar\\baz""#);
+        parse("a = b(c)");
+        parse("a = b.c");
+        parse("a = {}");
+        parse("a = { b = 1 }");
+        parse("a = (((1)))");
+        parse("a = []");
+        parse("a = [1]");
+        parse("a = [1, ]");
+        parse("a = [1, 2]");
+        parse("a = [1, 2, ]");
+
+        // TODO: Add more tests.
+    }
+
+    #[test]
+    fn comments() {
+        parse("# comment");
+        parse("# comment\n  # comment\n");
+        parse("a = 1 # comment");
+    }
+
+    #[test]
+    fn error_recovery() {
+        parse("a = 1 2 3");
+        parse("a = \"foo\nb = 1");
+        parse("declare_args() {}}");
+
+        // TODO: Add more tests.
+    }
+}

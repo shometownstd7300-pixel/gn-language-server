@@ -1,0 +1,58 @@
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE? }
+skip = _{ WHITESPACE* ~ (COMMENT ~ WHITESPACE*)* }
+
+file = ${ SOI ~ (WHITESPACE | comment | statement | error | unmatched_brace)* ~ EOI }
+statement = !{ assignment | condition | call }
+lvalue = { array_access | scope_access | identifier }
+assignment = { lvalue ~ assign_op ~ expr }
+call = ${ identifier ~ skip ~ "(" ~ skip ~ expr_list ~ skip ~ ")" ~ (skip ~ block)? }
+condition = { "if" ~ "(" ~ expr ~ ")" ~ block ~ ("else" ~ (condition | block))? }
+error = { rest_of_line }
+block = ${ "{" ~ (WHITESPACE | comment | statement | error)* ~ "}" }
+
+array_access = !{ identifier ~ "[" ~ expr ~ "]" }
+scope_access = !{ identifier ~ "." ~ identifier }
+expr = !{ prefix* ~ primary ~ (infix ~ prefix* ~ primary)* }
+prefix = _{ not }
+infix = _{ add | sub | le | lt | ge | gt | eq | ne | and | or }
+primary = _{ identifier | integer | string | call | array_access | scope_access | block | "(" ~ expr ~ ")" | "[" ~ expr_list ~ ","? ~ "]" }
+expr_list = !{ (expr ~ ("," ~ expr)*)? }
+
+assign_op = { "=" | "+=" | "-=" }
+add = { "+" }
+sub = { "-" }
+lt = { "<=" }
+le = { "<" }
+gt = { ">=" }
+ge = { ">" }
+eq = { "==" }
+ne = { "!=" }
+and = { "&&" }
+or = { "||" }
+not = { "!" }
+
+identifier = @{ ('A'..'Z' | 'a'..'z' | "_") ~ ('A'..'Z' | 'a'..'z' | '0'..'9' | "_")* }
+integer = @{ "-"? ~ ('0'..'9')+ }
+string = ${ "\"" ~ string_content ~ "\"" }
+string_content = @{ char* }
+char = { !("\"" | "\\") ~ ANY | "\\" ~ ANY }
+
+comment = ${ "#" ~ " "? ~ comment_content ~ NEWLINE? }
+comment_content = @{ (!NEWLINE ~ ANY)* }
+rest_of_line = @{ (!(NEWLINE | "}") ~ ANY)+ ~ NEWLINE? }
+unmatched_brace = { "}" }

@@ -15,56 +15,9 @@
 use std::path::PathBuf;
 
 use itertools::Itertools;
-use streaming_iterator::StreamingIterator;
-use tower_lsp::lsp_types::{Location, Range, Url};
-use tree_sitter::{Node, Query, QueryCursor};
+use tower_lsp::lsp_types::{Location, Url};
 
-use crate::{
-    parse::{gn_language, ParsedFile},
-    util::{parse_simple_literal, to_lsp_position, to_lsp_range},
-};
-
-fn is_template_block_node(node: &Node, source: &[u8]) -> bool {
-    if node.kind() != "block" {
-        return false;
-    }
-    let Some(node) = node.parent() else {
-        return false;
-    };
-    if node.kind() != "primary_expression" {
-        return false;
-    }
-    let Some(node) = node.prev_sibling() else {
-        return false;
-    };
-    if node.kind() != "primary_expression" {
-        return false;
-    }
-    let Some(node) = node.child(0) else {
-        return false;
-    };
-    if node.kind() != "call_expression" {
-        return false;
-    }
-    let Some(node) = node.named_child(0) else {
-        return false;
-    };
-    if node.kind() != "identifier" {
-        return false;
-    }
-    node.utf8_text(source).unwrap() == "template"
-}
-
-fn is_toplevel_node(node: &Node, source: &[u8]) -> bool {
-    let mut current_node = node.parent();
-    while let Some(node) = current_node {
-        if is_template_block_node(&node, source) {
-            return false;
-        }
-        current_node = node.parent();
-    }
-    true
-}
+use crate::{ast::Node, parse::ParsedFile, util::parse_simple_literal};
 
 #[allow(clippy::manual_map)]
 fn resolve_label<'s>(label: &'s str, file: &ParsedFile) -> Option<(PathBuf, &'s str)> {
@@ -90,64 +43,9 @@ fn resolve_label<'s>(label: &'s str, file: &ParsedFile) -> Option<(PathBuf, &'s 
     }
 }
 
-struct Queries {
-    pub templates: Query,
-    pub strings: Query,
-    pub targets: Query,
-}
-
-impl Queries {
-    pub fn new() -> Self {
-        let templates = Query::new(
-            gn_language(),
-            r#"
-            (
-                (primary_expression
-                    (call_expression
-                        function: (identifier) @keyword
-                        .
-                        (primary_expression (string (string_content) @name))
-                        (#eq? @keyword "template"))) @header
-                .
-                (primary_expression (block)) @block
-            )
-        "#,
-        )
-        .unwrap();
-        let strings = Query::new(
-            gn_language(),
-            r#"(string (string_content) @content) @literal"#,
-        )
-        .unwrap();
-        let targets = Query::new(
-            gn_language(),
-            r#"
-            (
-                (primary_expression
-                    (call_expression
-                        function: (identifier) @kind
-                        .
-                        (primary_expression (string (string_content) @name)))) @header
-                .
-                (primary_expression (block)) @block
-                (#not-eq? @kind "template")
-                (#not-eq? @kind "foreach")
-                (#not-eq? @kind "set_defaults")
-            )
-        "#,
-        )
-        .unwrap();
-        Self {
-            templates,
-            strings,
-            targets,
-        }
-    }
-}
-
 pub struct Template {
     pub name: String,
-    pub comment: Option<String>,
+    pub comments: Option<String>,
     pub header: Location,
     pub block: Location,
 }
@@ -171,154 +69,90 @@ pub struct Target {
     pub block: Location,
 }
 
-pub struct Analyzer {
-    queries: Queries,
-}
-
-impl Analyzer {
-    pub fn new() -> Self {
-        Self {
-            queries: Queries::new(),
-        }
-    }
-
-    pub fn scan_templates(&self, file: &ParsedFile) -> Vec<Template> {
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(
-            &self.queries.templates,
-            file.tree.root_node(),
-            file.document.data.as_slice(),
-        );
-
-        let mut templates = Vec::new();
-        while let Some(m) = matches.next() {
-            let name_node = m.nodes_for_capture_index(1).next().unwrap();
-            let header_node = m.nodes_for_capture_index(2).next().unwrap();
-            let block_node = m.nodes_for_capture_index(3).next().unwrap();
-            let name = name_node.utf8_text(&file.document.data).unwrap();
-            let comment = {
-                let mut comments = Vec::new();
-                let mut current_node = header_node.prev_sibling();
-                while let Some(node) = current_node {
-                    if node.kind() != "comment" {
-                        break;
-                    }
-                    let mut comment = node.utf8_text(&file.document.data).unwrap();
-                    comment = comment.trim_start_matches('#');
-                    if let Some(new_comment) = comment.strip_prefix(' ') {
-                        comment = new_comment;
-                    }
-                    comments.push(comment.to_string());
-                    current_node = node.prev_sibling();
-                }
-                if comments.is_empty() {
-                    None
-                } else {
-                    Some(comments.into_iter().rev().join("\n"))
-                }
-            };
-            templates.push(Template {
-                name: name.to_string(),
-                comment,
+pub fn analyze_templates(file: &ParsedFile) -> Vec<Template> {
+    file.root
+        .top_level_calls()
+        .filter_map(|call| {
+            if call.function.name != "template" {
+                return None;
+            }
+            if call.block.is_none() {
+                return None;
+            }
+            let name = call.args.iter().exactly_one().ok()?.as_primary_string()?;
+            Some(Template {
+                name: parse_simple_literal(&name.raw_value)?.to_string(),
+                comments: call.comments.as_ref().map(|comments| comments.text.clone()),
                 header: Location {
                     uri: Url::from_file_path(&file.document.path).unwrap(),
-                    range: to_lsp_range(&header_node.range()),
+                    range: file.document.line_index.range(name.span()),
                 },
                 block: Location {
                     uri: Url::from_file_path(&file.document.path).unwrap(),
-                    range: Range {
-                        start: to_lsp_position(&header_node.start_position()),
-                        end: to_lsp_position(&block_node.end_position()),
-                    },
+                    range: file.document.line_index.range(call.span),
                 },
-            });
-        }
-        templates
-    }
+            })
+        })
+        .collect()
+}
 
-    pub fn scan_links(&self, file: &ParsedFile) -> Vec<Link> {
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(
-            &self.queries.strings,
-            file.tree.root_node(),
-            file.document.data.as_slice(),
-        );
-
-        let mut links = Vec::new();
-        while let Some(m) = matches.next() {
-            let content_node = m.nodes_for_capture_index(0).next().unwrap();
-            let literal_node = m.nodes_for_capture_index(1).next().unwrap();
-
-            if let Some(content) =
-                parse_simple_literal(content_node.utf8_text(&file.document.data).unwrap())
-            {
-                if !content.contains(":") && content.contains(".") {
-                    let path = file
-                        .workspace
-                        .resolve_path(content, file.document.path.parent().unwrap());
-                    if let Ok(true) = path.try_exists() {
-                        links.push(Link::File {
-                            uri: Url::from_file_path(&path).unwrap(),
-                            location: Location {
-                                uri: Url::from_file_path(&file.document.path).unwrap(),
-                                range: to_lsp_range(&literal_node.range()),
-                            },
-                        });
-                    }
-                } else if let Some((build_gn_path, name)) = resolve_label(content, file) {
-                    links.push(Link::Target {
-                        uri: Url::from_file_path(&build_gn_path).unwrap(),
-                        name: name.to_string(),
+pub fn analyze_links(file: &ParsedFile) -> Vec<Link> {
+    file.root
+        .strings()
+        .filter_map(|string| {
+            let content = parse_simple_literal(&string.raw_value)?;
+            if !content.contains(":") && content.contains(".") {
+                let path = file
+                    .workspace
+                    .resolve_path(content, file.document.path.parent().unwrap());
+                if let Ok(true) = path.try_exists() {
+                    return Some(Link::File {
+                        uri: Url::from_file_path(&path).unwrap(),
                         location: Location {
                             uri: Url::from_file_path(&file.document.path).unwrap(),
-                            range: to_lsp_range(&literal_node.range()),
+                            range: file.document.line_index.range(string.span()),
                         },
                     });
                 }
+            } else if let Some((build_gn_path, name)) = resolve_label(content, file) {
+                return Some(Link::Target {
+                    uri: Url::from_file_path(&build_gn_path).unwrap(),
+                    name: name.to_string(),
+                    location: Location {
+                        uri: Url::from_file_path(&file.document.path).unwrap(),
+                        range: file.document.line_index.range(string.span()),
+                    },
+                });
             }
-        }
-        links
-    }
+            None
+        })
+        .collect()
+}
 
-    pub fn scan_targets(&self, file: &ParsedFile) -> Vec<Target> {
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(
-            &self.queries.targets,
-            file.tree.root_node(),
-            file.document.data.as_slice(),
-        );
-
-        let mut targets = Vec::new();
-        while let Some(m) = matches.next() {
-            let kind_node = m.nodes_for_capture_index(0).next().unwrap();
-            let name_node = m.nodes_for_capture_index(1).next().unwrap();
-            let header_node = m.nodes_for_capture_index(2).next().unwrap();
-            let block_node = m.nodes_for_capture_index(3).next().unwrap();
-            if let Some(name) =
-                parse_simple_literal(name_node.utf8_text(&file.document.data).unwrap())
-            {
-                if is_toplevel_node(&header_node, &file.document.data) {
-                    targets.push(Target {
-                        kind: kind_node
-                            .utf8_text(&file.document.data)
-                            .unwrap()
-                            .to_string(),
-                        name: name.to_string(),
-                        header: Location {
-                            uri: Url::from_file_path(&file.document.path).unwrap(),
-                            range: to_lsp_range(&header_node.range()),
-                        },
-                        block: Location {
-                            uri: Url::from_file_path(&file.document.path).unwrap(),
-                            range: Range {
-                                start: to_lsp_position(&header_node.start_position()),
-                                end: to_lsp_position(&block_node.end_position()),
-                            },
-                        },
-                    });
-                }
+pub fn analyze_targets(file: &ParsedFile) -> Vec<Target> {
+    file.root
+        .top_level_calls()
+        .filter_map(|call| {
+            match call.function.name {
+                "template" | "foreach" | "set_defaults" => return None,
+                _ => {}
             }
-        }
-        targets
-    }
+            if call.block.is_none() {
+                return None;
+            }
+            let name = call.args.iter().exactly_one().ok()?.as_primary_string()?;
+            Some(Target {
+                kind: call.function.name.to_string(),
+                name: parse_simple_literal(&name.raw_value)?.to_string(),
+                header: Location {
+                    uri: Url::from_file_path(&file.document.path).unwrap(),
+                    range: file.document.line_index.range(name.span()),
+                },
+                block: Location {
+                    uri: Url::from_file_path(&file.document.path).unwrap(),
+                    range: file.document.line_index.range(call.span()),
+                },
+            })
+        })
+        .collect()
 }

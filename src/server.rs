@@ -16,14 +16,13 @@ use std::{borrow::Cow, path::PathBuf};
 
 use tokio::sync::Mutex;
 use tower_lsp::{lsp_types::*, Client, LanguageServer, LspService, Server};
-use tree_sitter::{Node, Point};
 
 use crate::{
-    analyze::{Analyzer, Link},
+    analyze::{analyze_links, analyze_targets, analyze_templates, Link},
+    ast::{Identifier, Node},
     builtins::BUILTINS,
     parse::{ParsedFile, RecursiveParser},
     storage::DocumentStorage,
-    util::to_lsp_range,
 };
 
 type RpcResult<T> = tower_lsp::jsonrpc::Result<T>;
@@ -34,23 +33,11 @@ fn into_rpc_error(err: std::io::Error) -> tower_lsp::jsonrpc::Error {
     rpc_err
 }
 
-fn lookup_node<'file>(file: &'file ParsedFile, position: &Position) -> Node<'file> {
-    let position = Point {
-        row: position.line as usize,
-        column: position.character as usize,
-    };
-    let mut cursor = file.tree.walk();
-    while cursor.goto_first_child_for_point(position).is_some() {}
-    cursor.node()
-}
-
-fn lookup_node_of_kind<'file>(
-    file: &'file ParsedFile,
-    position: &Position,
-    kind: &str,
-) -> Option<Node<'file>> {
-    let node = lookup_node(file, position);
-    (node.kind() == kind).then_some(node)
+fn lookup_identifier_at(file: &ParsedFile, position: Position) -> Option<&Identifier> {
+    let offset = file.document.line_index.offset(position)?;
+    file.root
+        .identifiers()
+        .find(|ident| ident.span.start() <= offset && offset <= ident.span.end())
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -61,15 +48,13 @@ struct TargetLinkData {
 
 struct Backend {
     parser: Mutex<RecursiveParser>,
-    analyzer: Analyzer,
     client: Client,
 }
 
 impl Backend {
-    pub fn new(parser: RecursiveParser, analyzer: Analyzer, client: Client) -> Self {
+    pub fn new(parser: RecursiveParser, client: Client) -> Self {
         Self {
             parser: Mutex::new(parser),
-            analyzer,
             client,
         }
     }
@@ -96,6 +81,12 @@ impl LanguageServer for Backend {
         })
     }
 
+    async fn initialized(&self, _params: InitializedParams) {
+        self.client
+            .log_message(MessageType::INFO, "GN language server initialized")
+            .await;
+    }
+
     async fn shutdown(&self) -> RpcResult<()> {
         Ok(())
     }
@@ -107,13 +98,12 @@ impl LanguageServer for Backend {
 
         self.parser.lock().await.storage_mut().load_to_memory(
             &path,
-            params.text_document.text.as_bytes(),
+            &params.text_document.text,
             params.text_document.version,
         );
 
         // let file = self.parser.lock().await.parse(&path).unwrap().clone();
-        // let sexp = file.tree.root_node().to_sexp();
-        // self.client.log_message(MessageType::INFO, sexp).await;
+        // self.client.log_message(MessageType::INFO, format!("{:?}", file.root)).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -126,7 +116,7 @@ impl LanguageServer for Backend {
 
         self.parser.lock().await.storage_mut().load_to_memory(
             &path,
-            change.text.as_bytes(),
+            &change.text,
             params.text_document.version,
         );
     }
@@ -162,11 +152,9 @@ impl LanguageServer for Backend {
             .await
             .parse(&path)
             .map_err(into_rpc_error)?;
-        let Some(current_node) = lookup_node_of_kind(
-            &current_file,
-            &params.text_document_position_params.position,
-            "identifier",
-        ) else {
+        let Some(ident) =
+            lookup_identifier_at(&current_file, params.text_document_position_params.position)
+        else {
             return Ok(None);
         };
 
@@ -177,16 +165,12 @@ impl LanguageServer for Backend {
             .parse_all(&path)
             .map_err(into_rpc_error)?;
 
-        let name = current_node
-            .utf8_text(current_file.document.data.as_slice())
-            .unwrap();
-
         let links = files
             .iter()
-            .flat_map(|file| self.analyzer.scan_templates(file))
-            .filter(|template| template.name == name)
+            .flat_map(|file| analyze_templates(file))
+            .filter(|template| template.name == ident.name)
             .map(|template| LocationLink {
-                origin_selection_range: Some(to_lsp_range(&current_node.range())),
+                origin_selection_range: Some(current_file.document.line_index.range(ident.span)),
                 target_uri: template.block.uri.clone(),
                 target_range: template.block.range,
                 target_selection_range: template.header.range,
@@ -214,30 +198,25 @@ impl LanguageServer for Backend {
             .map_err(into_rpc_error)?;
 
         let current_file = &files[0];
-        let Some(current_node) = lookup_node_of_kind(
-            current_file,
-            &params.text_document_position_params.position,
-            "identifier",
-        ) else {
+        let Some(ident) =
+            lookup_identifier_at(current_file, params.text_document_position_params.position)
+        else {
             return Ok(None);
         };
-        let name = current_node
-            .utf8_text(current_file.document.data.as_slice())
-            .unwrap();
 
         // Check builtins first.
-        if let Some(symbol) = BUILTINS.all().find(|symbol| symbol.name == name) {
+        if let Some(symbol) = BUILTINS.all().find(|symbol| symbol.name == ident.name) {
             let contents = vec![MarkedString::from_markdown(symbol.doc.to_string())];
             return Ok(Some(Hover {
                 contents: HoverContents::Array(contents),
-                range: Some(to_lsp_range(&current_node.range())),
+                range: Some(current_file.document.line_index.range(ident.span)),
             }));
         }
 
         let Some(template) = files
             .iter()
-            .flat_map(|file| self.analyzer.scan_templates(file))
-            .find(|template| template.name == name)
+            .flat_map(|file| analyze_templates(file))
+            .find(|template| template.name == ident.name)
         else {
             return Ok(None);
         };
@@ -247,11 +226,11 @@ impl LanguageServer for Backend {
             "text".to_string(),
             format!("template(\"{}\") {{ ... }}", template.name),
         )];
-        if let Some(comment) = &template.comment {
+        if let Some(comments) = &template.comments {
             contents.push(MarkedString::from_markdown("---".to_string()));
             contents.push(MarkedString::from_language_code(
                 "text".to_string(),
-                comment.clone(),
+                comments.clone(),
             ));
         };
         contents.push(MarkedString::from_markdown(format!(
@@ -262,7 +241,7 @@ impl LanguageServer for Backend {
 
         Ok(Some(Hover {
             contents: HoverContents::Array(contents),
-            range: Some(to_lsp_range(&current_node.range())),
+            range: Some(current_file.document.line_index.range(ident.span)),
         }))
     }
 
@@ -281,7 +260,7 @@ impl LanguageServer for Backend {
             .parse(&path)
             .map_err(into_rpc_error)?;
 
-        let links = self.analyzer.scan_links(&file);
+        let links = analyze_links(&file);
 
         let document_links = links
             .into_iter()
@@ -330,7 +309,7 @@ impl LanguageServer for Backend {
             .parse(&data.path)
             .map_err(into_rpc_error)?;
 
-        let targets = self.analyzer.scan_targets(&file);
+        let targets = analyze_targets(&file);
         let Some(target) = targets.into_iter().find(|t| t.name == data.name) else {
             return Err(tower_lsp::jsonrpc::Error::internal_error());
         };
@@ -360,8 +339,8 @@ impl LanguageServer for Backend {
             .parse(&path)
             .map_err(into_rpc_error)?;
 
-        let templates = self.analyzer.scan_templates(&file);
-        let targets = self.analyzer.scan_targets(&file);
+        let templates = analyze_templates(&file);
+        let targets = analyze_targets(&file);
 
         #[allow(deprecated)]
         let symbols = templates
@@ -394,8 +373,7 @@ impl LanguageServer for Backend {
 
 pub async fn run() {
     let parser = RecursiveParser::new(DocumentStorage::new());
-    let analyzer = Analyzer::new();
-    let (service, socket) = LspService::new(move |client| Backend::new(parser, analyzer, client));
+    let (service, socket) = LspService::new(move |client| Backend::new(parser, client));
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
