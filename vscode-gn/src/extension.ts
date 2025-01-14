@@ -45,6 +45,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		command: path.join(extensionDir, 'dist/gn-language-server' + EXECUTABLE_SUFFIX),
 		options: {
 			cwd: extensionDir,
+			env: {
+				RUST_BACKTRACE: '1',
+			},
 		},
 	};
 
