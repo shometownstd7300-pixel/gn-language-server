@@ -30,16 +30,16 @@ scope_access = !{ identifier ~ "." ~ identifier }
 expr = !{ prefix* ~ primary ~ (infix ~ prefix* ~ primary)* }
 prefix = _{ not }
 infix = _{ add | sub | le | lt | ge | gt | eq | ne | and | or }
-primary = _{ identifier | integer | string | call | array_access | scope_access | block | "(" ~ expr ~ ")" | "[" ~ expr_list ~ ","? ~ "]" }
+primary = _{ call | array_access | scope_access | block | "(" ~ expr ~ ")" | "[" ~ expr_list ~ ","? ~ "]" | integer | string | identifier}
 expr_list = !{ (expr ~ ("," ~ expr)*)? }
 
 assign_op = { "=" | "+=" | "-=" }
 add = { "+" }
 sub = { "-" }
-lt = { "<=" }
-le = { "<" }
-gt = { ">=" }
-ge = { ">" }
+lt = { "<" }
+le = { "<=" }
+gt = { ">" }
+ge = { ">=" }
 eq = { "==" }
 ne = { "!=" }
 and = { "&&" }
