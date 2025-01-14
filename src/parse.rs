@@ -76,7 +76,7 @@ pub struct ParsedFile {
 
 impl ParsedFile {
     pub fn empty(path: &Path, workspace: &WorkspaceContext) -> Arc<Self> {
-        let document = Arc::new(Document::empty(path));
+        let document = Document::empty(path);
         let root = Block::empty(&document.data);
         // SAFETY: root's contents are backed by document.data that are guaranteed to have
         // the identical lifetime because ParsedFile in Arc is immutable.
