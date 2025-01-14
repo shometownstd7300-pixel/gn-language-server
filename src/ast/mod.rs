@@ -235,6 +235,15 @@ pub struct Block<'i> {
     pub span: Span<'i>,
 }
 
+impl<'i> Block<'i> {
+    pub fn empty(input: &'i str) -> Self {
+        Block {
+            statements: Vec::new(),
+            span: Span::new(input, 0, 0).unwrap(),
+        }
+    }
+}
+
 impl<'i> Node<'i> for Block<'i> {
     fn as_node(&self) -> &dyn Node {
         self
@@ -291,7 +300,8 @@ impl<'i, 'b> Iterator for TopLevelCalls<'i, 'b> {
                     }
                     self.stack.extend(new_statements.into_iter().rev());
                 }
-                Some(_) => {}
+                Some(Statement::Unknown(_)) => {}
+                Some(Statement::UnmatchedBrace(_)) => {}
             }
         }
     }

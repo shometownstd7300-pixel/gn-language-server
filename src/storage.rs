@@ -25,6 +25,7 @@ use crate::util::LineIndex;
 pub enum DocumentVersion {
     OnDisk { modified: SystemTime },
     InMemory { revision: i32 },
+    Missing,
 }
 
 #[derive(Clone)]
@@ -33,6 +34,21 @@ pub struct Document {
     pub data: String,
     pub line_index: LineIndex<'static>,
     pub version: DocumentVersion,
+}
+
+impl Document {
+    pub fn empty(path: &Path) -> Self {
+        let data = String::new();
+        let line_index = LineIndex::new(&data);
+        // SAFETY: line_index is backed by data, which is guaranteed to be valid for the lifetime of Document.
+        let line_index = unsafe { std::mem::transmute::<LineIndex, LineIndex>(line_index) };
+        Self {
+            path: path.to_path_buf(),
+            data,
+            line_index,
+            version: DocumentVersion::Missing,
+        }
+    }
 }
 
 #[derive(Default)]

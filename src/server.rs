@@ -21,7 +21,7 @@ use crate::{
     analyze::{analyze_links, analyze_symbols, analyze_targets, analyze_templates, Link},
     ast::{Identifier, Node},
     builtins::BUILTINS,
-    parse::{ParsedFile, RecursiveParser},
+    parse::{ParsedFile, Parser},
     storage::DocumentStorage,
 };
 
@@ -47,12 +47,12 @@ struct TargetLinkData {
 }
 
 struct Backend {
-    parser: Mutex<RecursiveParser>,
+    parser: Mutex<Parser>,
     client: Client,
 }
 
 impl Backend {
-    pub fn new(parser: RecursiveParser, client: Client) -> Self {
+    pub fn new(parser: Parser, client: Client) -> Self {
         Self {
             parser: Mutex::new(parser),
             client,
@@ -152,20 +152,15 @@ impl LanguageServer for Backend {
             .await
             .parse(&path)
             .map_err(into_rpc_error)?;
+
         let Some(ident) =
             lookup_identifier_at(&current_file, params.text_document_position_params.position)
         else {
             return Ok(None);
         };
 
-        let files = self
-            .parser
-            .lock()
-            .await
-            .parse_all(&path)
-            .map_err(into_rpc_error)?;
-
-        let links = files
+        let links = current_file
+            .flatten()
             .iter()
             .flat_map(|file| analyze_templates(file))
             .filter(|template| template.name == ident.name)
@@ -190,16 +185,15 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let files = self
+        let current_file = self
             .parser
             .lock()
             .await
-            .parse_all(&path)
+            .parse(&path)
             .map_err(into_rpc_error)?;
 
-        let current_file = &files[0];
         let Some(ident) =
-            lookup_identifier_at(current_file, params.text_document_position_params.position)
+            lookup_identifier_at(&current_file, params.text_document_position_params.position)
         else {
             return Ok(None);
         };
@@ -213,7 +207,8 @@ impl LanguageServer for Backend {
             }));
         }
 
-        let Some(template) = files
+        let Some(template) = current_file
+            .flatten()
             .iter()
             .flat_map(|file| analyze_templates(file))
             .find(|template| template.name == ident.name)
@@ -345,7 +340,7 @@ impl LanguageServer for Backend {
 }
 
 pub async fn run() {
-    let parser = RecursiveParser::new(DocumentStorage::new());
+    let parser = Parser::new(DocumentStorage::new());
     let (service, socket) = LspService::new(move |client| Backend::new(parser, client));
 
     let stdin = tokio::io::stdin();
