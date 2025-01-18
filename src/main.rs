@@ -15,7 +15,6 @@
 mod analyze;
 mod ast;
 mod builtins;
-mod parse;
 mod server;
 mod storage;
 mod util;

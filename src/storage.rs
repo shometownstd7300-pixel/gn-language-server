@@ -32,8 +32,8 @@ pub enum DocumentVersion {
 pub struct Document {
     pub path: PathBuf,
     pub data: String,
-    pub line_index: LineIndex<'static>,
     pub version: DocumentVersion,
+    pub line_index: LineIndex<'static>,
 }
 
 impl Document {
@@ -45,8 +45,8 @@ impl Document {
         Arc::new(Self {
             path: path.to_path_buf(),
             data,
-            line_index,
             version,
+            line_index,
         })
     }
 
@@ -54,6 +54,23 @@ impl Document {
         Self::new(path, String::new(), DocumentVersion::Missing)
     }
 }
+
+impl std::hash::Hash for Document {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
+        self.data.hash(state);
+        // Skip LineIndex as it's derived from data.
+        self.version.hash(state);
+    }
+}
+
+impl PartialEq for Document {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.data == other.data && self.version == other.version
+    }
+}
+
+impl Eq for Document {}
 
 #[derive(Default)]
 pub struct DocumentStorage {

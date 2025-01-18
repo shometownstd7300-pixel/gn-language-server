@@ -12,33 +12,317 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
+use std::{
+    collections::{BTreeMap, HashSet},
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use either::Either;
 use itertools::Itertools;
-use tower_lsp::lsp_types::{DocumentSymbol, Location, SymbolKind, Url};
+use pest::Span;
+use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::{
-    ast::{Node, Statement},
-    builtins::is_no_target_call,
-    parse::ParsedFile,
+    ast::{parse, AssignOp, Block, Expr, LValue, Node, PrimaryExpr, Statement},
+    storage::{Document, DocumentStorage},
     util::{parse_simple_literal, LineIndex},
 };
 
+fn is_exported(name: &str) -> bool {
+    !name.starts_with("_")
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WorkspaceContext {
+    pub root: PathBuf,
+}
+
+impl WorkspaceContext {
+    pub fn find_for(path: &Path) -> std::io::Result<Self> {
+        for dir in path.ancestors().skip(1) {
+            if dir.join(".gn").try_exists()? {
+                return Ok(Self {
+                    root: dir.to_path_buf(),
+                });
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Workspace not found for {}", path.to_string_lossy()),
+        ))
+    }
+
+    pub fn resolve_path(&self, name: &str, current_dir: &Path) -> PathBuf {
+        if let Some(rest) = name.strip_prefix("//") {
+            self.root.join(rest)
+        } else {
+            current_dir.join(name)
+        }
+    }
+}
+
+pub struct AnalyzedFile {
+    pub document: Arc<Document>,
+    pub workspace: WorkspaceContext,
+    pub ast_root: Block<'static>,
+    pub analyzed_root: AnalyzedBlock<'static>,
+    pub links: Vec<Link<'static>>,
+    pub symbols: Vec<DocumentSymbol>,
+}
+
+impl AnalyzedFile {
+    pub fn variables_at(&self, pos: usize) -> Vec<&AnalyzedVariable> {
+        self.analyzed_root.variables_at(pos)
+    }
+
+    pub fn templates_at(&self, pos: usize) -> Vec<&AnalyzedTemplate> {
+        self.analyzed_root.templates_at(pos)
+    }
+
+    pub fn targets_at(&self, pos: usize) -> Vec<&AnalyzedTarget> {
+        self.analyzed_root.targets_at(pos)
+    }
+}
+
+pub struct ThinAnalyzedFile {
+    pub document: Arc<Document>,
+    pub workspace: WorkspaceContext,
+    pub analyzed_root: ThinAnalyzedBlock<'static>,
+}
+
+impl ThinAnalyzedFile {
+    pub fn empty(path: &Path, workspace: &WorkspaceContext) -> Arc<Self> {
+        let document = Document::empty(path);
+        Arc::new(ThinAnalyzedFile {
+            document,
+            workspace: workspace.clone(),
+            analyzed_root: ThinAnalyzedBlock::new(),
+        })
+    }
+}
+
+pub struct AnalyzedBlock<'i> {
+    pub statements: Vec<AnalyzedStatement<'i>>,
+    pub span: Span<'i>,
+}
+
+impl<'i> AnalyzedBlock<'i> {
+    pub fn variables_at(&'i self, pos: usize) -> Vec<&'i AnalyzedVariable<'i>> {
+        let mut variables = Vec::new();
+        for statement in &self.statements {
+            match statement {
+                AnalyzedStatement::Variable(variable) => {
+                    if variable.span.end() <= pos {
+                        variables.push(variable);
+                    }
+                }
+                AnalyzedStatement::Conditions(blocks) => {
+                    if blocks.last().unwrap().span.end() <= pos {
+                        for block in blocks {
+                            variables.extend(block.variables_at(pos));
+                        }
+                    } else {
+                        for block in blocks {
+                            if block.span.start() <= pos && pos <= block.span.end() {
+                                variables.extend(block.variables_at(pos));
+                            }
+                        }
+                    }
+                }
+                AnalyzedStatement::Import(import) => {
+                    if import.span.end() <= pos {
+                        variables.extend(import.file.analyzed_root.variables.iter());
+                    }
+                }
+                AnalyzedStatement::DeclareArgs(block) => {
+                    // A variable defined in declare_args() cannot be read in the later part of the
+                    // same block.
+                    if block.span.end() <= pos {
+                        variables.extend(block.variables_at(pos));
+                    }
+                }
+                AnalyzedStatement::NewScope(block) => {
+                    variables.extend(block.variables_at(pos));
+                }
+                AnalyzedStatement::Template(_) | AnalyzedStatement::Target(_) => {}
+            }
+        }
+        variables
+    }
+
+    pub fn templates_at(&'i self, pos: usize) -> Vec<&'i AnalyzedTemplate<'i>> {
+        let mut templates = Vec::new();
+        for statement in &self.statements {
+            match statement {
+                AnalyzedStatement::Conditions(blocks) => {
+                    if blocks.last().unwrap().span.end() <= pos {
+                        for block in blocks {
+                            templates.extend(block.templates_at(pos));
+                        }
+                    } else {
+                        for block in blocks {
+                            if block.span.start() <= pos && pos <= block.span.end() {
+                                templates.extend(block.templates_at(pos));
+                            }
+                        }
+                    }
+                }
+                AnalyzedStatement::Import(import) => {
+                    if import.span.end() <= pos {
+                        templates.extend(import.file.analyzed_root.templates.iter());
+                    }
+                }
+                AnalyzedStatement::Template(template) => {
+                    if template.span.end() <= pos {
+                        templates.push(template);
+                    }
+                }
+                AnalyzedStatement::NewScope(block) => {
+                    if block.span.start() <= pos && pos <= block.span.end() {
+                        templates.extend(block.templates_at(pos));
+                    }
+                }
+                AnalyzedStatement::Variable(_)
+                | AnalyzedStatement::DeclareArgs(_)
+                | AnalyzedStatement::Target(_) => {}
+            }
+        }
+        templates
+    }
+
+    pub fn targets_at(&'i self, pos: usize) -> Vec<&'i AnalyzedTarget<'i>> {
+        let mut targets = Vec::new();
+        for statement in &self.statements {
+            match statement {
+                AnalyzedStatement::Conditions(blocks) => {
+                    if blocks.last().unwrap().span.end() <= pos {
+                        for block in blocks {
+                            targets.extend(block.targets_at(pos));
+                        }
+                    } else {
+                        for block in blocks {
+                            if block.span.start() <= pos && pos <= block.span.end() {
+                                targets.extend(block.targets_at(pos));
+                            }
+                        }
+                    }
+                }
+                AnalyzedStatement::Import(import) => {
+                    if import.span.end() <= pos {
+                        targets.extend(import.file.analyzed_root.targets.iter());
+                    }
+                }
+                AnalyzedStatement::Target(target) => {
+                    if target.span.end() <= pos {
+                        targets.push(target);
+                    }
+                }
+                AnalyzedStatement::NewScope(block) => {
+                    if block.span.start() <= pos && pos <= block.span.end() {
+                        targets.extend(block.targets_at(pos));
+                    }
+                }
+                AnalyzedStatement::Variable(_)
+                | AnalyzedStatement::DeclareArgs(_)
+                | AnalyzedStatement::Template(_) => {}
+            }
+        }
+        targets
+    }
+}
+
+pub struct ThinAnalyzedBlock<'i> {
+    pub variables: HashSet<AnalyzedVariable<'i>>,
+    pub templates: HashSet<AnalyzedTemplate<'i>>,
+    pub targets: HashSet<AnalyzedTarget<'i>>,
+}
+
+impl ThinAnalyzedBlock<'_> {
+    pub fn new() -> Self {
+        ThinAnalyzedBlock {
+            variables: HashSet::new(),
+            templates: HashSet::new(),
+            targets: HashSet::new(),
+        }
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        self.variables.extend(other.variables.clone());
+        self.templates.extend(other.templates.clone());
+        self.targets.extend(other.targets.clone());
+    }
+}
+
+pub enum AnalyzedStatement<'i> {
+    Conditions(Vec<AnalyzedBlock<'i>>),
+    Import(AnalyzedImport<'i>),
+    DeclareArgs(AnalyzedBlock<'i>),
+    Variable(AnalyzedVariable<'i>),
+    Template(AnalyzedTemplate<'i>),
+    Target(AnalyzedTarget<'i>),
+    NewScope(AnalyzedBlock<'i>),
+}
+
+pub struct AnalyzedImport<'i> {
+    pub file: Arc<ThinAnalyzedFile>,
+    pub span: Span<'i>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct AnalyzedVariable<'i> {
+    pub name: &'i str,
+    pub document: &'i Document,
+    pub span: Span<'i>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct AnalyzedTemplate<'i> {
+    pub name: &'i str,
+    pub comments: Option<String>,
+    pub document: &'i Document,
+    pub header: Span<'i>,
+    pub span: Span<'i>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct AnalyzedTarget<'i> {
+    pub name: &'i str,
+    pub document: &'i Document,
+    pub header: Span<'i>,
+    pub span: Span<'i>,
+}
+
+pub enum Link<'i> {
+    /// Link to a file. No range is specified.
+    File { path: PathBuf, span: Span<'i> },
+    /// Link to a target defined in a BUILD.gn file.
+    Target {
+        path: PathBuf,
+        name: &'i str,
+        span: Span<'i>,
+    },
+}
+
 #[allow(clippy::manual_map)]
-fn resolve_label<'s>(label: &'s str, file: &ParsedFile) -> Option<(PathBuf, &'s str)> {
+fn resolve_label<'s>(
+    label: &'s str,
+    current_path: &Path,
+    workspace: &WorkspaceContext,
+) -> Option<(PathBuf, &'s str)> {
     if let Some((prefix, name)) = label.split_once(':') {
         if prefix.is_empty() {
-            Some((file.document.path.clone(), name))
+            Some((current_path.to_path_buf(), name))
         } else if let Some(rel_dir) = prefix.strip_prefix("//") {
-            Some((file.workspace.root.join(rel_dir).join("BUILD.gn"), name))
+            Some((workspace.root.join(rel_dir).join("BUILD.gn"), name))
         } else {
             None
         }
     } else if let Some(rel_dir) = label.strip_prefix("//") {
         if !rel_dir.is_empty() {
             Some((
-                file.workspace.root.join(rel_dir).join("BUILD.gn"),
+                workspace.root.join(rel_dir).join("BUILD.gn"),
                 rel_dir.split('/').last().unwrap(),
             ))
         } else {
@@ -49,108 +333,31 @@ fn resolve_label<'s>(label: &'s str, file: &ParsedFile) -> Option<(PathBuf, &'s 
     }
 }
 
-pub struct Template {
-    pub name: String,
-    pub comments: Option<String>,
-    pub header: Location,
-    pub block: Location,
-}
-
-pub enum Link {
-    File {
-        uri: Url,
-        location: Location,
-    },
-    Target {
-        uri: Url,
-        name: String,
-        location: Location,
-    },
-}
-
-pub struct Target {
-    pub name: String,
-    pub header: Location,
-}
-
-pub fn analyze_templates(file: &ParsedFile) -> Vec<Template> {
-    file.root
-        .top_level_calls()
-        .filter_map(|call| {
-            if call.function.name != "template" {
-                return None;
-            }
-            if call.block.is_none() {
-                return None;
-            }
-            let name = call.args.iter().exactly_one().ok()?.as_primary_string()?;
-            Some(Template {
-                name: parse_simple_literal(&name.raw_value)?.to_string(),
-                comments: call.comments.as_ref().map(|comments| comments.text.clone()),
-                header: Location {
-                    uri: Url::from_file_path(&file.document.path).unwrap(),
-                    range: file.document.line_index.range(name.span()),
-                },
-                block: Location {
-                    uri: Url::from_file_path(&file.document.path).unwrap(),
-                    range: file.document.line_index.range(call.span),
-                },
-            })
-        })
-        .collect()
-}
-
-pub fn analyze_links(file: &ParsedFile) -> Vec<Link> {
-    file.root
+fn collect_links<'i>(
+    ast_root: &Block<'i>,
+    path: &Path,
+    workspace: &WorkspaceContext,
+) -> Vec<Link<'i>> {
+    ast_root
         .strings()
         .filter_map(|string| {
-            let content = parse_simple_literal(&string.raw_value)?;
+            let content = parse_simple_literal(string.raw_value)?;
             if !content.contains(":") && content.contains(".") {
-                let path = file
-                    .workspace
-                    .resolve_path(content, file.document.path.parent().unwrap());
+                let path = workspace.resolve_path(content, path);
                 if let Ok(true) = path.try_exists() {
                     return Some(Link::File {
-                        uri: Url::from_file_path(&path).unwrap(),
-                        location: Location {
-                            uri: Url::from_file_path(&file.document.path).unwrap(),
-                            range: file.document.line_index.range(string.span()),
-                        },
+                        path: path.to_path_buf(),
+                        span: string.span,
                     });
                 }
-            } else if let Some((build_gn_path, name)) = resolve_label(content, file) {
+            } else if let Some((build_gn_path, name)) = resolve_label(content, path, workspace) {
                 return Some(Link::Target {
-                    uri: Url::from_file_path(&build_gn_path).unwrap(),
-                    name: name.to_string(),
-                    location: Location {
-                        uri: Url::from_file_path(&file.document.path).unwrap(),
-                        range: file.document.line_index.range(string.span()),
-                    },
+                    path: build_gn_path,
+                    name,
+                    span: string.span,
                 });
             }
             None
-        })
-        .collect()
-}
-
-pub fn analyze_targets(file: &ParsedFile) -> Vec<Target> {
-    file.root
-        .top_level_calls()
-        .filter_map(|call| {
-            if is_no_target_call(call.function.name) {
-                return None;
-            }
-            if call.block.is_none() {
-                return None;
-            }
-            let name = call.args.iter().exactly_one().ok()?.as_primary_string()?;
-            Some(Target {
-                name: parse_simple_literal(&name.raw_value)?.to_string(),
-                header: Location {
-                    uri: Url::from_file_path(&file.document.path).unwrap(),
-                    range: file.document.line_index.range(name.span()),
-                },
-            })
         })
         .collect()
 }
@@ -248,6 +455,528 @@ fn collect_symbols(node: &dyn Node, line_index: &LineIndex) -> Vec<DocumentSymbo
     symbols
 }
 
-pub fn analyze_symbols(file: &ParsedFile) -> Vec<DocumentSymbol> {
-    collect_symbols(file.root.as_node(), &file.document.line_index)
+#[derive(Debug)]
+struct LoopError {
+    cycle: Vec<PathBuf>,
+}
+
+impl std::fmt::Display for LoopError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Cycle detected: ")?;
+        for (i, path) in self.cycle.iter().enumerate() {
+            if i > 0 {
+                write!(f, " -> ")?;
+            }
+            write!(f, "{}", path.to_string_lossy())?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for LoopError {}
+
+impl From<LoopError> for std::io::Error {
+    fn from(err: LoopError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+    }
+}
+
+pub struct Analyzer {
+    storage: DocumentStorage,
+    cache_fat: BTreeMap<PathBuf, Arc<AnalyzedFile>>,
+    cache_thin: BTreeMap<PathBuf, Arc<ThinAnalyzedFile>>,
+}
+
+impl Analyzer {
+    pub fn new(storage: DocumentStorage) -> Self {
+        Self {
+            storage,
+            cache_fat: BTreeMap::new(),
+            cache_thin: BTreeMap::new(),
+        }
+    }
+
+    pub fn storage_mut(&mut self) -> &mut DocumentStorage {
+        &mut self.storage
+    }
+
+    pub fn analyze(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
+        let path = path.canonicalize()?;
+        let workspace = WorkspaceContext::find_for(&path)?;
+        self.analyze_fat_cached(&path, &workspace)
+    }
+
+    fn analyze_fat_cached(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+    ) -> std::io::Result<Arc<AnalyzedFile>> {
+        if let Some(cached_file) = self.cache_fat.get(path) {
+            if &cached_file.workspace == workspace {
+                let latest_version = self.storage.read_version(path)?;
+                if latest_version == cached_file.document.version {
+                    return Ok(cached_file.clone());
+                }
+            }
+        }
+
+        let new_file = self.analyze_fat_uncached(path, workspace)?;
+        self.cache_fat.insert(path.to_path_buf(), new_file.clone());
+
+        Ok(new_file)
+    }
+
+    fn analyze_fat_uncached(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+    ) -> std::io::Result<Arc<AnalyzedFile>> {
+        let document = self.storage.read(path)?;
+        let ast_root = parse(&document.data);
+
+        let analyzed_root = self.analyze_fat_block(&ast_root, workspace, &document)?;
+
+        // SAFETY: *_block's contents are backed by document.data that are guaranteed to have
+        // the identical lifetime because AnalyzedFile in Arc is immutable.
+        let ast_root = unsafe { std::mem::transmute::<Block, Block>(ast_root) };
+        let analyzed_root =
+            unsafe { std::mem::transmute::<AnalyzedBlock, AnalyzedBlock>(analyzed_root) };
+        let links = collect_links(&ast_root, path, workspace);
+        let symbols = collect_symbols(&ast_root, &document.line_index);
+        Ok(Arc::new(AnalyzedFile {
+            document,
+            workspace: workspace.clone(),
+            ast_root,
+            analyzed_root,
+            links,
+            symbols,
+        }))
+    }
+
+    fn analyze_thin_cached(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+        actives: &mut Vec<PathBuf>,
+    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
+        if let Some(cached_file) = self.cache_thin.get(path) {
+            if &cached_file.workspace == workspace {
+                let latest_version = self.storage.read_version(path)?;
+                if latest_version == cached_file.document.version {
+                    return Ok(cached_file.clone());
+                }
+            }
+        }
+
+        let new_file = self.analyze_thin_uncached(path, workspace, actives)?;
+        self.cache_thin.insert(path.to_path_buf(), new_file.clone());
+
+        Ok(new_file)
+    }
+
+    fn analyze_thin_uncached(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+        actives: &mut Vec<PathBuf>,
+    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
+        if actives.iter().any(|p| p == path) {
+            return Err(LoopError {
+                cycle: std::mem::take(actives),
+            }
+            .into());
+        }
+
+        actives.push(path.to_path_buf());
+        let result = self.analyze_thin_uncached_inner(path, workspace, actives);
+        actives.pop();
+        result
+    }
+
+    fn analyze_thin_uncached_inner(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+        actives: &mut Vec<PathBuf>,
+    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
+        let document = match self.storage.read(path) {
+            Ok(document) => document,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                // Ignore missing imports as they might be imported conditionally.
+                return Ok(ThinAnalyzedFile::empty(path, workspace));
+            }
+            Err(err) => return Err(err),
+        };
+        let block = parse(&document.data);
+
+        let analyzed_root = self.analyze_thin_block(&block, workspace, &document, actives)?;
+
+        // SAFETY: analyzed_root's contents are backed by document.data that are guaranteed to have
+        // the identical lifetime because AnalyzedFile in Arc is immutable.
+        let analyzed_root =
+            unsafe { std::mem::transmute::<ThinAnalyzedBlock, ThinAnalyzedBlock>(analyzed_root) };
+        Ok(Arc::new(ThinAnalyzedFile {
+            document,
+            workspace: workspace.clone(),
+            analyzed_root,
+        }))
+    }
+
+    fn analyze_fat_block<'i>(
+        &mut self,
+        block: &Block<'i>,
+        workspace: &WorkspaceContext,
+        document: &'i Document,
+    ) -> std::io::Result<AnalyzedBlock<'i>> {
+        let statements: Vec<AnalyzedStatement> = block
+            .statements
+            .iter()
+            .map(|statement| -> std::io::Result<Vec<AnalyzedStatement>> {
+                match statement {
+                    Statement::Assignment(assignment) => {
+                        let mut statements = Vec::new();
+                        if let LValue::Identifier(identifier) = &assignment.lvalue {
+                            if assignment.op == AssignOp::Assign {
+                                statements.push(AnalyzedStatement::Variable(AnalyzedVariable {
+                                    name: identifier.name,
+                                    document,
+                                    span: assignment.span,
+                                }));
+                            }
+                        }
+                        statements.extend(self.analyze_fat_expr(
+                            &assignment.rvalue,
+                            workspace,
+                            document,
+                        )?);
+                        Ok(statements)
+                    }
+                    Statement::Call(call) => {
+                        match call.function.name {
+                            "import" => {
+                                if let Some(name) = call
+                                    .args
+                                    .iter()
+                                    .exactly_one()
+                                    .ok()
+                                    .and_then(|expr| expr.as_primary_string())
+                                    .and_then(|s| parse_simple_literal(s.raw_value))
+                                {
+                                    let path = workspace
+                                        .resolve_path(name, document.path.parent().unwrap());
+                                    let file = match self.analyze_thin_cached(
+                                        &path,
+                                        workspace,
+                                        &mut Vec::new(),
+                                    ) {
+                                        Err(err) if err.kind() == ErrorKind::NotFound => {
+                                            // Ignore missing imports as they might be imported conditionally.
+                                            ThinAnalyzedFile::empty(&path, workspace)
+                                        }
+                                        other => other?,
+                                    };
+                                    Ok(vec![AnalyzedStatement::Import(AnalyzedImport {
+                                        file,
+                                        span: call.span(),
+                                    })])
+                                } else {
+                                    Ok(Vec::new())
+                                }
+                            }
+                            "template" => {
+                                let mut statements = Vec::new();
+                                if let Some(name) = call
+                                    .args
+                                    .iter()
+                                    .exactly_one()
+                                    .ok()
+                                    .and_then(|expr| expr.as_primary_string())
+                                    .and_then(|s| parse_simple_literal(s.raw_value))
+                                {
+                                    statements.push(AnalyzedStatement::Template(
+                                        AnalyzedTemplate {
+                                            name,
+                                            comments: call
+                                                .comments
+                                                .as_ref()
+                                                .map(|comments| comments.text.clone()),
+                                            document,
+                                            header: call.function.span,
+                                            span: call.span,
+                                        },
+                                    ));
+                                }
+                                if let Some(block) = &call.block {
+                                    statements.push(AnalyzedStatement::NewScope(
+                                        self.analyze_fat_block(block, workspace, document)?,
+                                    ));
+                                }
+                                Ok(statements)
+                            }
+                            "declare_args" => {
+                                if let Some(block) = &call.block {
+                                    let analyzed_root =
+                                        self.analyze_fat_block(block, workspace, document)?;
+                                    Ok(vec![AnalyzedStatement::DeclareArgs(analyzed_root)])
+                                } else {
+                                    Ok(Vec::new())
+                                }
+                            }
+                            "foreach" => {
+                                if let Some(block) = &call.block {
+                                    Ok(self
+                                        .analyze_fat_block(block, workspace, document)?
+                                        .statements)
+                                } else {
+                                    Ok(Vec::new())
+                                }
+                            }
+                            "set_defaults" => {
+                                if let Some(block) = &call.block {
+                                    let analyzed_root =
+                                        self.analyze_fat_block(block, workspace, document)?;
+                                    Ok(vec![AnalyzedStatement::NewScope(analyzed_root)])
+                                } else {
+                                    Ok(Vec::new())
+                                }
+                            }
+                            _ => {
+                                let mut statements = Vec::new();
+                                if let Some(name) = call
+                                    .args
+                                    .iter()
+                                    .exactly_one()
+                                    .ok()
+                                    .and_then(|expr| expr.as_primary_string())
+                                    .and_then(|s| parse_simple_literal(s.raw_value))
+                                {
+                                    statements.push(AnalyzedStatement::Target(AnalyzedTarget {
+                                        name,
+                                        document,
+                                        header: call.args[0].span(),
+                                        span: call.span,
+                                    }));
+                                }
+                                if let Some(block) = &call.block {
+                                    statements.push(AnalyzedStatement::NewScope(
+                                        self.analyze_fat_block(block, workspace, document)?,
+                                    ));
+                                }
+                                Ok(statements)
+                            }
+                        }
+                    }
+                    Statement::Condition(condition) => {
+                        let mut statements = Vec::new();
+                        let mut condition_blocks = Vec::new();
+                        let mut current_condition = condition;
+                        loop {
+                            statements.extend(self.analyze_fat_expr(
+                                &current_condition.condition,
+                                workspace,
+                                document,
+                            )?);
+                            condition_blocks.push(self.analyze_fat_block(
+                                &current_condition.then_block,
+                                workspace,
+                                document,
+                            )?);
+                            match &current_condition.else_block {
+                                None => break,
+                                Some(Either::Left(next_condition)) => {
+                                    current_condition = next_condition;
+                                }
+                                Some(Either::Right(block)) => {
+                                    condition_blocks
+                                        .push(self.analyze_fat_block(block, workspace, document)?);
+                                    break;
+                                }
+                            }
+                        }
+                        statements.push(AnalyzedStatement::Conditions(condition_blocks));
+                        Ok(statements)
+                    }
+                    Statement::Unknown(_) | Statement::UnmatchedBrace(_) => Ok(Vec::new()),
+                }
+            })
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        Ok(AnalyzedBlock {
+            statements,
+            span: block.span,
+        })
+    }
+
+    fn analyze_fat_expr<'i>(
+        &mut self,
+        expr: &Expr<'i>,
+        workspace: &WorkspaceContext,
+        document: &'i Document,
+    ) -> std::io::Result<Vec<AnalyzedStatement<'i>>> {
+        match expr {
+            Expr::Primary(primary_expr) => match primary_expr {
+                PrimaryExpr::Block(block) => {
+                    let analyzed_root = self.analyze_fat_block(block, workspace, document)?;
+                    Ok(vec![AnalyzedStatement::NewScope(analyzed_root)])
+                }
+                PrimaryExpr::Call(call) => {
+                    let mut statements: Vec<_> = call
+                        .args
+                        .iter()
+                        .map(|expr| self.analyze_fat_expr(expr, workspace, document))
+                        .collect::<std::io::Result<Vec<_>>>()?
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    if let Some(block) = &call.block {
+                        let analyzed_root = self.analyze_fat_block(block, workspace, document)?;
+                        statements.push(AnalyzedStatement::NewScope(analyzed_root));
+                    }
+                    Ok(statements)
+                }
+                PrimaryExpr::ParenExpr(expr) => self.analyze_fat_expr(expr, workspace, document),
+                PrimaryExpr::List(list_literal) => Ok(list_literal
+                    .values
+                    .iter()
+                    .map(|expr| self.analyze_fat_expr(expr, workspace, document))
+                    .collect::<std::io::Result<Vec<_>>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect()),
+                PrimaryExpr::Identifier(_)
+                | PrimaryExpr::Integer(_)
+                | PrimaryExpr::String(_)
+                | PrimaryExpr::ArrayAccess(_)
+                | PrimaryExpr::ScopeAccess(_) => Ok(Vec::new()),
+            },
+            Expr::Unary(unary_expr) => self.analyze_fat_expr(&unary_expr.expr, workspace, document),
+            Expr::Binary(binary_expr) => {
+                let mut statements =
+                    self.analyze_fat_expr(&binary_expr.lhs, workspace, document)?;
+                statements.extend(self.analyze_fat_expr(&binary_expr.rhs, workspace, document)?);
+                Ok(statements)
+            }
+        }
+    }
+
+    fn analyze_thin_block<'i>(
+        &mut self,
+        block: &Block<'i>,
+        workspace: &WorkspaceContext,
+        document: &'i Document,
+        actives: &mut Vec<PathBuf>,
+    ) -> std::io::Result<ThinAnalyzedBlock<'i>> {
+        let mut analyzed_block = ThinAnalyzedBlock::new();
+
+        for statement in &block.statements {
+            match statement {
+                Statement::Assignment(assignment) => {
+                    if let LValue::Identifier(identifier) = &assignment.lvalue {
+                        if assignment.op == AssignOp::Assign && is_exported(identifier.name) {
+                            analyzed_block.variables.insert(AnalyzedVariable {
+                                name: identifier.name,
+                                document,
+                                span: assignment.span,
+                            });
+                        }
+                    }
+                }
+                Statement::Call(call) => match call.function.name {
+                    "import" => {
+                        if let Some(name) = call
+                            .args
+                            .iter()
+                            .exactly_one()
+                            .ok()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            let path =
+                                workspace.resolve_path(name, document.path.parent().unwrap());
+                            let file = self.analyze_thin_cached(&path, workspace, actives)?;
+                            analyzed_block.merge(&file.analyzed_root);
+                        }
+                    }
+                    "template" => {
+                        if let Some(name) = call
+                            .args
+                            .iter()
+                            .exactly_one()
+                            .ok()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            if is_exported(name) {
+                                analyzed_block.templates.insert(AnalyzedTemplate {
+                                    name,
+                                    comments: call
+                                        .comments
+                                        .as_ref()
+                                        .map(|comments| comments.text.clone()),
+                                    document,
+                                    header: call.function.span,
+                                    span: call.span,
+                                });
+                            }
+                        }
+                    }
+                    "declare_args" | "foreach" => {
+                        if let Some(block) = &call.block {
+                            analyzed_block.merge(
+                                &self.analyze_thin_block(block, workspace, document, actives)?,
+                            );
+                        }
+                    }
+                    "set_defaults" => {}
+                    _ => {
+                        if let Some(name) = call
+                            .args
+                            .iter()
+                            .exactly_one()
+                            .ok()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            analyzed_block.targets.insert(AnalyzedTarget {
+                                name,
+                                document,
+                                header: call.args[0].span(),
+                                span: call.span,
+                            });
+                        }
+                    }
+                },
+                Statement::Condition(condition) => {
+                    let mut current_condition = condition;
+                    loop {
+                        analyzed_block.merge(&self.analyze_thin_block(
+                            &current_condition.then_block,
+                            workspace,
+                            document,
+                            actives,
+                        )?);
+                        match &current_condition.else_block {
+                            None => break,
+                            Some(Either::Left(next_condition)) => {
+                                current_condition = next_condition;
+                            }
+                            Some(Either::Right(block)) => {
+                                analyzed_block.merge(
+                                    &self
+                                        .analyze_thin_block(block, workspace, document, actives)?,
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                Statement::Unknown(_) | Statement::UnmatchedBrace(_) => {}
+            }
+        }
+
+        Ok(analyzed_block)
+    }
 }

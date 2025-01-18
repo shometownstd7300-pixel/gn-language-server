@@ -25,15 +25,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
-			{'scheme': 'file', 'pattern': '**/BUILD.gn'},
+			{'scheme': 'file', 'pattern': '**/*.gn'},
 			{'scheme': 'file', 'pattern': '**/*.gni'},
-			{'scheme': 'file', 'pattern': '**/.gn'},
 		],
 		synchronize: {
 			fileEvents: [
-				vscode.workspace.createFileSystemWatcher('**/BUILD.gn'),
+				vscode.workspace.createFileSystemWatcher('**/*.gn'),
 				vscode.workspace.createFileSystemWatcher('**/*.gni'),
-				vscode.workspace.createFileSystemWatcher('**/.gn'),
 			],
 		},
 		outputChannel: output,

@@ -18,8 +18,8 @@ use pest::Span;
 mod parser;
 
 pub trait Node<'i> {
-    fn as_node(&self) -> &dyn Node;
-    fn children(&self) -> Vec<&dyn Node>;
+    fn as_node(&self) -> &dyn Node<'i>;
+    fn children(&self) -> Vec<&dyn Node<'i>>;
     fn span(&self) -> Span<'i>;
 
     fn as_statement(&self) -> Option<&Statement<'i>> {
@@ -34,27 +34,27 @@ pub trait Node<'i> {
         None
     }
 
-    fn identifiers(&'i self) -> FilterWalk<'i, Identifier<'i>> {
+    fn identifiers<'n>(&'n self) -> FilterWalk<'i, 'n, Identifier<'i>> {
         FilterWalk::new(self.as_node(), |node| node.as_identifier())
     }
 
-    fn strings(&'i self) -> FilterWalk<'i, StringLiteral<'i>> {
+    fn strings<'n>(&'n self) -> FilterWalk<'i, 'n, StringLiteral<'i>> {
         FilterWalk::new(self.as_node(), |node| node.as_string())
     }
 }
 
-pub struct Walk<'i> {
-    stack: Vec<&'i dyn Node<'i>>,
+pub struct Walk<'i, 'n> {
+    stack: Vec<&'n dyn Node<'i>>,
 }
 
-impl<'i> Walk<'i> {
-    pub fn new(node: &'i dyn Node<'i>) -> Self {
+impl<'i, 'n> Walk<'i, 'n> {
+    pub fn new(node: &'n dyn Node<'i>) -> Self {
         Walk { stack: vec![node] }
     }
 }
 
-impl<'i> Iterator for Walk<'i> {
-    type Item = &'i dyn Node<'i>;
+impl<'i, 'n> Iterator for Walk<'i, 'n> {
+    type Item = &'n dyn Node<'i>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let node = self.stack.pop()?;
@@ -63,20 +63,20 @@ impl<'i> Iterator for Walk<'i> {
     }
 }
 
-pub struct FilterWalk<'i, T> {
-    inner: std::iter::FilterMap<Walk<'i>, fn(&'i dyn Node<'i>) -> Option<&'i T>>,
+pub struct FilterWalk<'i, 'n, T> {
+    inner: std::iter::FilterMap<Walk<'i, 'n>, fn(&'n dyn Node<'i>) -> Option<&'n T>>,
 }
 
-impl<'i, T> FilterWalk<'i, T> {
-    pub fn new(node: &'i dyn Node<'i>, filter: fn(&'i dyn Node<'i>) -> Option<&'i T>) -> Self {
+impl<'i, 'n, T> FilterWalk<'i, 'n, T> {
+    pub fn new(node: &'n dyn Node<'i>, filter: fn(&'n dyn Node<'i>) -> Option<&'n T>) -> Self {
         FilterWalk {
             inner: Walk::new(node).filter_map(filter),
         }
     }
 }
 
-impl<'i, T> Iterator for FilterWalk<'i, T> {
-    type Item = &'i T;
+impl<'i, 'n, T> Iterator for FilterWalk<'i, 'n, T> {
+    type Item = &'n T;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
@@ -93,11 +93,11 @@ pub enum Statement<'i> {
 }
 
 impl<'i> Node<'i> for Statement<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
             Statement::Assignment(assignment) => vec![assignment],
             Statement::Call(call) => vec![call],
@@ -130,11 +130,11 @@ pub enum LValue<'i> {
 }
 
 impl<'i> Node<'i> for LValue<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
             LValue::Identifier(identifier) => vec![identifier],
             LValue::ArrayAccess(array_access) => vec![array_access],
@@ -160,11 +160,11 @@ pub struct Assignment<'i> {
 }
 
 impl<'i> Node<'i> for Assignment<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         vec![&self.lvalue, &*self.rvalue]
     }
 
@@ -183,11 +183,11 @@ pub struct Call<'i> {
 }
 
 impl<'i> Node<'i> for Call<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         let mut children: Vec<&dyn Node> = vec![&self.function];
         children.extend(self.args.iter().map(|arg| arg as &dyn Node));
         if let Some(block) = &self.block {
@@ -210,11 +210,11 @@ pub struct Condition<'i> {
 }
 
 impl<'i> Node<'i> for Condition<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         let mut children: Vec<&dyn Node> = vec![&*self.condition, &self.then_block];
         match &self.else_block {
             Some(Either::Left(else_condition)) => children.push(&**else_condition),
@@ -235,21 +235,12 @@ pub struct Block<'i> {
     pub span: Span<'i>,
 }
 
-impl<'i> Block<'i> {
-    pub fn empty(input: &'i str) -> Self {
-        Block {
-            statements: Vec::new(),
-            span: Span::new(input, 0, 0).unwrap(),
-        }
-    }
-}
-
 impl<'i> Node<'i> for Block<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         self.statements
             .iter()
             .map(|statement| statement as &dyn Node)
@@ -261,52 +252,6 @@ impl<'i> Node<'i> for Block<'i> {
     }
 }
 
-pub struct TopLevelCalls<'i, 'b> {
-    pub stack: Vec<&'b Statement<'i>>,
-}
-
-impl Block<'_> {
-    pub fn top_level_calls(&self) -> TopLevelCalls {
-        TopLevelCalls {
-            stack: self.statements.iter().rev().collect(),
-        }
-    }
-}
-
-impl<'i, 'b> Iterator for TopLevelCalls<'i, 'b> {
-    type Item = &'b Call<'i>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.stack.pop() {
-                None => return None,
-                Some(Statement::Assignment(_)) => {}
-                Some(Statement::Call(call)) => return Some(call),
-                Some(Statement::Condition(condition)) => {
-                    let mut current_condition = condition;
-                    let mut new_statements = Vec::new();
-                    loop {
-                        new_statements.extend(current_condition.then_block.statements.iter());
-                        match &current_condition.else_block {
-                            None => break,
-                            Some(Either::Left(next_condition)) => {
-                                current_condition = next_condition;
-                            }
-                            Some(Either::Right(block)) => {
-                                new_statements.extend(block.statements.iter());
-                                break;
-                            }
-                        }
-                    }
-                    self.stack.extend(new_statements.into_iter().rev());
-                }
-                Some(Statement::Unknown(_)) => {}
-                Some(Statement::UnmatchedBrace(_)) => {}
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ArrayAccess<'i> {
     pub array: Identifier<'i>,
@@ -315,11 +260,11 @@ pub struct ArrayAccess<'i> {
 }
 
 impl<'i> Node<'i> for ArrayAccess<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         vec![&self.array, &*self.index]
     }
 
@@ -336,11 +281,11 @@ pub struct ScopeAccess<'i> {
 }
 
 impl<'i> Node<'i> for ScopeAccess<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         vec![&self.scope, &self.member]
     }
 
@@ -366,11 +311,11 @@ impl<'i> Expr<'i> {
 }
 
 impl<'i> Node<'i> for Expr<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
             Expr::Primary(primary_expr) => vec![primary_expr],
             Expr::Unary(unary_expr) => vec![unary_expr],
@@ -401,11 +346,11 @@ pub enum PrimaryExpr<'i> {
 }
 
 impl<'i> Node<'i> for PrimaryExpr<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
             PrimaryExpr::Identifier(identifier) => vec![identifier],
             PrimaryExpr::Integer(integer) => vec![integer],
@@ -442,11 +387,11 @@ pub struct UnaryExpr<'i> {
 }
 
 impl<'i> Node<'i> for UnaryExpr<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         vec![&*self.expr]
     }
 
@@ -464,11 +409,11 @@ pub struct BinaryExpr<'i> {
 }
 
 impl<'i> Node<'i> for BinaryExpr<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         vec![&*self.lhs, &*self.rhs]
     }
 
@@ -520,11 +465,11 @@ pub struct Identifier<'i> {
 }
 
 impl<'i> Node<'i> for Identifier<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         Vec::new()
     }
 
@@ -544,11 +489,11 @@ pub struct IntegerLiteral<'i> {
 }
 
 impl<'i> Node<'i> for IntegerLiteral<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         Vec::new()
     }
 
@@ -559,16 +504,16 @@ impl<'i> Node<'i> for IntegerLiteral<'i> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StringLiteral<'i> {
-    pub raw_value: String,
+    pub raw_value: &'i str,
     pub span: Span<'i>,
 }
 
 impl<'i> Node<'i> for StringLiteral<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         Vec::new()
     }
 
@@ -588,11 +533,11 @@ pub struct ListLiteral<'i> {
 }
 
 impl<'i> Node<'i> for ListLiteral<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         self.values.iter().map(|value| value as &dyn Node).collect()
     }
 
@@ -608,11 +553,11 @@ pub struct UnknownStatement<'i> {
 }
 
 impl<'i> Node<'i> for UnknownStatement<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         Vec::new()
     }
 
@@ -627,11 +572,11 @@ pub struct UnmatchedBrace<'i> {
 }
 
 impl<'i> Node<'i> for UnmatchedBrace<'i> {
-    fn as_node(&self) -> &dyn Node {
+    fn as_node(&self) -> &dyn Node<'i> {
         self
     }
 
-    fn children(&self) -> Vec<&dyn Node> {
+    fn children(&self) -> Vec<&dyn Node<'i>> {
         Vec::new()
     }
 

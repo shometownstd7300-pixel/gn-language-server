@@ -62,7 +62,7 @@ fn convert_string(pair: Pair<Rule>) -> StringLiteral {
     let span = pair.as_span();
     let pair = pair.into_inner().exactly_one().unwrap();
     assert!(matches!(pair.as_rule(), Rule::string_content));
-    let raw_value = pair.as_str().to_string();
+    let raw_value = pair.as_str();
     StringLiteral { raw_value, span }
 }
 

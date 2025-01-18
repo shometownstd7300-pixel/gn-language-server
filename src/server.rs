@@ -14,14 +14,14 @@
 
 use std::{borrow::Cow, path::PathBuf};
 
+use itertools::Itertools;
 use tokio::sync::Mutex;
 use tower_lsp::{lsp_types::*, Client, LanguageServer, LspService, Server};
 
 use crate::{
-    analyze::{analyze_links, analyze_symbols, analyze_targets, analyze_templates, Link},
+    analyze::{AnalyzedFile, Analyzer, Link},
     ast::{Identifier, Node},
     builtins::BUILTINS,
-    parse::{ParsedFile, Parser},
     storage::DocumentStorage,
 };
 
@@ -33,9 +33,9 @@ fn into_rpc_error(err: std::io::Error) -> tower_lsp::jsonrpc::Error {
     rpc_err
 }
 
-fn lookup_identifier_at(file: &ParsedFile, position: Position) -> Option<&Identifier> {
+fn lookup_identifier_at(file: &AnalyzedFile, position: Position) -> Option<&Identifier> {
     let offset = file.document.line_index.offset(position)?;
-    file.root
+    file.ast_root
         .identifiers()
         .find(|ident| ident.span.start() <= offset && offset <= ident.span.end())
 }
@@ -47,14 +47,14 @@ struct TargetLinkData {
 }
 
 struct Backend {
-    parser: Mutex<Parser>,
+    analyzer: Mutex<Analyzer>,
     client: Client,
 }
 
 impl Backend {
-    pub fn new(parser: Parser, client: Client) -> Self {
+    pub fn new(analyzer: Analyzer, client: Client) -> Self {
         Self {
-            parser: Mutex::new(parser),
+            analyzer: Mutex::new(analyzer),
             client,
         }
     }
@@ -96,13 +96,13 @@ impl LanguageServer for Backend {
             return;
         };
 
-        self.parser.lock().await.storage_mut().load_to_memory(
+        self.analyzer.lock().await.storage_mut().load_to_memory(
             &path,
             &params.text_document.text,
             params.text_document.version,
         );
 
-        // let file = self.parser.lock().await.parse(&path).unwrap().clone();
+        // let file = self.parser.lock().await.analyze(&path).unwrap().clone();
         // self.client.log_message(MessageType::INFO, format!("{:?}", file.root)).await;
     }
 
@@ -114,7 +114,7 @@ impl LanguageServer for Backend {
             return;
         };
 
-        self.parser.lock().await.storage_mut().load_to_memory(
+        self.analyzer.lock().await.storage_mut().load_to_memory(
             &path,
             &change.text,
             params.text_document.version,
@@ -126,7 +126,7 @@ impl LanguageServer for Backend {
             return;
         };
 
-        self.parser
+        self.analyzer
             .lock()
             .await
             .storage_mut()
@@ -147,10 +147,10 @@ impl LanguageServer for Backend {
         };
 
         let current_file = self
-            .parser
+            .analyzer
             .lock()
             .await
-            .parse(&path)
+            .analyze(&path)
             .map_err(into_rpc_error)?;
 
         let Some(ident) =
@@ -160,15 +160,14 @@ impl LanguageServer for Backend {
         };
 
         let links = current_file
-            .flatten()
-            .iter()
-            .flat_map(|file| analyze_templates(file))
+            .templates_at(ident.span.start())
+            .into_iter()
             .filter(|template| template.name == ident.name)
             .map(|template| LocationLink {
                 origin_selection_range: Some(current_file.document.line_index.range(ident.span)),
-                target_uri: template.block.uri.clone(),
-                target_range: template.block.range,
-                target_selection_range: template.header.range,
+                target_uri: Url::from_file_path(&template.document.path).unwrap(),
+                target_range: template.document.line_index.range(template.span),
+                target_selection_range: template.document.line_index.range(template.header),
             })
             .collect();
 
@@ -186,10 +185,10 @@ impl LanguageServer for Backend {
         };
 
         let current_file = self
-            .parser
+            .analyzer
             .lock()
             .await
-            .parse(&path)
+            .analyze(&path)
             .map_err(into_rpc_error)?;
 
         let Some(ident) =
@@ -198,7 +197,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        // Check builtins first.
+        // Check builtin rules.
         if let Some(symbol) = BUILTINS.all().find(|symbol| symbol.name == ident.name) {
             let contents = vec![MarkedString::from_markdown(symbol.doc.to_string())];
             return Ok(Some(Hover {
@@ -207,37 +206,69 @@ impl LanguageServer for Backend {
             }));
         }
 
-        let Some(template) = current_file
-            .flatten()
-            .iter()
-            .flat_map(|file| analyze_templates(file))
-            .find(|template| template.name == ident.name)
-        else {
-            return Ok(None);
-        };
-
-        // Build the hover contents.
-        let mut contents = vec![MarkedString::from_language_code(
-            "text".to_string(),
-            format!("template(\"{}\") {{ ... }}", template.name),
-        )];
-        if let Some(comments) = &template.comments {
-            contents.push(MarkedString::from_markdown("---".to_string()));
-            contents.push(MarkedString::from_language_code(
+        // Check templates.
+        let templates: Vec<_> = current_file
+            .templates_at(ident.span.start())
+            .into_iter()
+            .filter(|template| template.name == ident.name)
+            .sorted_by_key(|template| (&template.document.path, template.span.start()))
+            .collect();
+        if let Some(template) = templates.first() {
+            let mut contents = vec![MarkedString::from_language_code(
                 "text".to_string(),
-                comments.clone(),
-            ));
-        };
-        contents.push(MarkedString::from_markdown(format!(
-            "Go to [Definition]({}#L{})",
-            template.header.uri,
-            template.header.range.start.line + 1
-        )));
+                format!("template(\"{}\") {{ ... }}", template.name),
+            )];
+            if let Some(comments) = &template.comments {
+                contents.push(MarkedString::from_markdown("---".to_string()));
+                contents.push(MarkedString::from_language_code(
+                    "text".to_string(),
+                    comments.clone(),
+                ));
+            };
+            contents.push(MarkedString::from_markdown(format!(
+                "Go to [Definition]({}#L{})",
+                Url::from_file_path(&template.document.path).unwrap(),
+                template
+                    .document
+                    .line_index
+                    .range(template.header)
+                    .start
+                    .line
+                    + 1
+            )));
 
-        Ok(Some(Hover {
-            contents: HoverContents::Array(contents),
-            range: Some(current_file.document.line_index.range(ident.span)),
-        }))
+            return Ok(Some(Hover {
+                contents: HoverContents::Array(contents),
+                range: Some(current_file.document.line_index.range(ident.span)),
+            }));
+        }
+
+        // Check variables.
+        let variables: Vec<_> = current_file
+            .variables_at(ident.span.start())
+            .into_iter()
+            .filter(|variable| variable.name == ident.name)
+            .sorted_by_key(|variable| (&variable.document.path, variable.span.start()))
+            .collect();
+        if let Some(variable) = variables.first() {
+            let mut contents = vec![MarkedString::from_language_code(
+                "text".to_string(),
+                format!("{} = ...", variable.name),
+            )];
+            // TODO: Add comments information.
+            contents.push(MarkedString::from_markdown(format!(
+                "Go to [Initial Assignment]({}#L{})",
+                Url::from_file_path(&variable.document.path).unwrap(),
+                variable.document.line_index.range(variable.span).start.line + 1
+            )));
+
+            return Ok(Some(Hover {
+                contents: HoverContents::Array(contents),
+                range: Some(current_file.document.line_index.range(ident.span)),
+            }));
+        }
+
+        Ok(None)
     }
 
     async fn document_link(
@@ -248,36 +279,31 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let file = self
-            .parser
+        let current_file = self
+            .analyzer
             .lock()
             .await
-            .parse(&path)
+            .analyze(&path)
             .map_err(into_rpc_error)?;
 
-        let links = analyze_links(&file);
-
-        let document_links = links
-            .into_iter()
+        let links = current_file
+            .links
+            .iter()
             .map(|link| match link {
-                Link::File { uri, location } => DocumentLink {
-                    target: Some(uri),
-                    range: location.range,
+                Link::File { path, span } => DocumentLink {
+                    target: Some(Url::from_file_path(path).unwrap()),
+                    range: current_file.document.line_index.range(*span),
                     tooltip: None,
                     data: None,
                 },
-                Link::Target {
-                    uri,
-                    name,
-                    location,
-                } => DocumentLink {
+                Link::Target { path, name, span } => DocumentLink {
                     target: None, // Resolve with positions later.
-                    range: location.range,
+                    range: current_file.document.line_index.range(*span),
                     tooltip: None,
                     data: Some(
                         serde_json::to_value(TargetLinkData {
-                            path: uri.to_file_path().unwrap(),
-                            name,
+                            path: path.to_path_buf(),
+                            name: name.to_string(),
                         })
                         .unwrap(),
                     ),
@@ -285,7 +311,7 @@ impl LanguageServer for Backend {
             })
             .collect();
 
-        Ok(Some(document_links))
+        Ok(Some(links))
     }
 
     async fn document_link_resolve(&self, mut link: DocumentLink) -> RpcResult<DocumentLink> {
@@ -297,23 +323,27 @@ impl LanguageServer for Backend {
             return Err(tower_lsp::jsonrpc::Error::internal_error());
         };
 
-        let file = self
-            .parser
+        let target_file = self
+            .analyzer
             .lock()
             .await
-            .parse(&data.path)
+            .analyze(&data.path)
             .map_err(into_rpc_error)?;
 
-        let targets = analyze_targets(&file);
-        let Some(target) = targets.into_iter().find(|t| t.name == data.name) else {
+        let Some(target) = target_file
+            .targets_at(usize::MAX)
+            .into_iter()
+            .find(|t| t.name == data.name)
+        else {
             return Err(tower_lsp::jsonrpc::Error::internal_error());
         };
 
+        let range = target.document.line_index.range(target.span);
         let mut uri = Url::from_file_path(&data.path).unwrap();
         uri.set_fragment(Some(&format!(
             "L{},{}",
-            target.header.range.start.line + 1,
-            target.header.range.start.character + 1
+            range.start.line + 1,
+            range.start.character + 1,
         )));
         link.target = Some(uri);
         Ok(link)
@@ -327,21 +357,22 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let file = self
-            .parser
+        let current_file = self
+            .analyzer
             .lock()
             .await
-            .parse(&path)
+            .analyze(&path)
             .map_err(into_rpc_error)?;
 
-        let symbols = analyze_symbols(&file);
-        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+        Ok(Some(DocumentSymbolResponse::Nested(
+            current_file.symbols.clone(),
+        )))
     }
 }
 
 pub async fn run() {
-    let parser = Parser::new(DocumentStorage::new());
-    let (service, socket) = LspService::new(move |client| Backend::new(parser, client));
+    let analyzer = Analyzer::new(DocumentStorage::new());
+    let (service, socket) = LspService::new(move |client| Backend::new(analyzer, client));
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
