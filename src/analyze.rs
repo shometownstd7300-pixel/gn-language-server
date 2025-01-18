@@ -34,33 +34,119 @@ fn is_exported(name: &str) -> bool {
     !name.starts_with("_")
 }
 
+fn find_workspace_root(path: &Path) -> std::io::Result<PathBuf> {
+    for dir in path.ancestors().skip(1) {
+        if dir.join(".gn").try_exists()? {
+            return Ok(dir.to_path_buf());
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("Workspace not found for {}", path.to_string_lossy()),
+    ))
+}
+
+fn resolve_path(name: &str, root_dir: &Path, current_dir: &Path) -> PathBuf {
+    if let Some(rest) = name.strip_prefix("//") {
+        root_dir.join(rest)
+    } else {
+        current_dir.join(name)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorkspaceContext {
     pub root: PathBuf,
+    pub build_config: PathBuf,
 }
 
 impl WorkspaceContext {
-    pub fn find_for(path: &Path) -> std::io::Result<Self> {
-        for dir in path.ancestors().skip(1) {
-            if dir.join(".gn").try_exists()? {
-                return Ok(Self {
-                    root: dir.to_path_buf(),
-                });
-            }
+    pub fn resolve_path(&self, name: &str, current_dir: &Path) -> PathBuf {
+        resolve_path(name, &self.root, current_dir)
+    }
+}
+
+fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
+    let workspace_root = path.parent().unwrap();
+
+    let input = std::fs::read_to_string(path)?;
+    let line_index = LineIndex::new(&input);
+    let ast_root = parse(&input);
+
+    let mut build_config_path: Option<PathBuf> = None;
+
+    for statement in &ast_root.statements {
+        let Statement::Assignment(assignment) = statement else {
+            continue;
+        };
+        if !matches!(&assignment.lvalue, LValue::Identifier(identifier) if identifier.name == "buildconfig")
+        {
+            continue;
         }
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Workspace not found for {}", path.to_string_lossy()),
-        ))
+
+        let position = line_index.position(assignment.span.start());
+
+        if assignment.op != AssignOp::Assign {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{}:{}:{}: buildconfig must be assigned exactly once",
+                    path.to_string_lossy(),
+                    position.line + 1,
+                    position.character + 1
+                ),
+            ));
+        }
+        let Some(string) = assignment.rvalue.as_primary_string() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{}:{}:{}: buildconfig is not a simple string",
+                    path.to_string_lossy(),
+                    position.line + 1,
+                    position.character + 1
+                ),
+            ));
+        };
+        let Some(name) = parse_simple_literal(&string.raw_value) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{}:{}:{}: buildconfig is not a simple string",
+                    path.to_string_lossy(),
+                    position.line + 1,
+                    position.character + 1
+                ),
+            ));
+        };
+
+        if build_config_path
+            .replace(resolve_path(name, workspace_root, workspace_root))
+            .is_some()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{}:{}:{}: buildconfig is assigned multiple times",
+                    path.to_string_lossy(),
+                    position.line + 1,
+                    position.character + 1
+                ),
+            ));
+        }
     }
 
-    pub fn resolve_path(&self, name: &str, current_dir: &Path) -> PathBuf {
-        if let Some(rest) = name.strip_prefix("//") {
-            self.root.join(rest)
-        } else {
-            current_dir.join(name)
-        }
-    }
+    let Some(build_config_path) = build_config_path else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{}: buildconfig is not assigned directly",
+                path.to_string_lossy()
+            ),
+        ));
+    };
+
+    Ok(build_config_path)
 }
 
 pub struct AnalyzedFile {
@@ -483,6 +569,7 @@ impl From<LoopError> for std::io::Error {
 
 pub struct Analyzer {
     storage: DocumentStorage,
+    cache_workspace: BTreeMap<PathBuf, WorkspaceContext>,
     cache_fat: BTreeMap<PathBuf, Arc<AnalyzedFile>>,
     cache_thin: BTreeMap<PathBuf, Arc<ThinAnalyzedFile>>,
 }
@@ -491,6 +578,7 @@ impl Analyzer {
     pub fn new(storage: DocumentStorage) -> Self {
         Self {
             storage,
+            cache_workspace: BTreeMap::new(),
             cache_fat: BTreeMap::new(),
             cache_thin: BTreeMap::new(),
         }
@@ -502,8 +590,23 @@ impl Analyzer {
 
     pub fn analyze(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
         let path = path.canonicalize()?;
-        let workspace = WorkspaceContext::find_for(&path)?;
+        let workspace = self.workspace_for(&path)?;
         self.analyze_fat_cached(&path, &workspace)
+    }
+
+    fn workspace_for(&mut self, path: &Path) -> std::io::Result<WorkspaceContext> {
+        let workspace_root = find_workspace_root(path)?;
+        if let Some(workspace) = self.cache_workspace.get(&workspace_root) {
+            return Ok(workspace.clone());
+        }
+
+        let workspace = WorkspaceContext {
+            root: workspace_root.clone(),
+            build_config: evaluate_dot_gn(&workspace_root.join(".gn"))?,
+        };
+        self.cache_workspace
+            .insert(workspace_root, workspace.clone());
+        Ok(workspace)
     }
 
     fn analyze_fat_cached(
@@ -534,7 +637,20 @@ impl Analyzer {
         let document = self.storage.read(path)?;
         let ast_root = parse(&document.data);
 
-        let analyzed_root = self.analyze_fat_block(&ast_root, workspace, &document)?;
+        let mut analyzed_root = self.analyze_fat_block(&ast_root, workspace, &document)?;
+
+        // Insert a synthetic import of BUILDCONFIG.gn.
+        analyzed_root.statements.insert(
+            0,
+            AnalyzedStatement::Import(AnalyzedImport {
+                file: self.analyze_thin_cached(
+                    &workspace.build_config,
+                    workspace,
+                    &mut Vec::new(),
+                )?,
+                span: Span::new(&document.data, 0, 0).unwrap(),
+            }),
+        );
 
         // SAFETY: *_block's contents are backed by document.data that are guaranteed to have
         // the identical lifetime because AnalyzedFile in Arc is immutable.
