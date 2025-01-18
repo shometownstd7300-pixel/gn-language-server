@@ -522,52 +522,66 @@ fn collect_symbols(node: &dyn Node, line_index: &LineIndex) -> Vec<DocumentSymbo
                     });
                 }
             }
-            Statement::Condition(condition) => {
-                symbols.push(DocumentSymbol {
-                    name: format!("if ({})", condition.condition.span().as_str()),
+            Statement::Condition(top_condition) => {
+                let mut top_symbol = DocumentSymbol {
+                    name: format!("if ({})", top_condition.condition.span().as_str()),
                     detail: None,
                     kind: SymbolKind::NAMESPACE,
                     tags: None,
                     deprecated: None,
-                    range: line_index.range(condition.span()),
-                    selection_range: line_index.range(condition.condition.span()),
-                    children: Some(collect_symbols(condition.then_block.as_node(), line_index)),
-                });
-                let mut next_else_block = &condition.else_block;
+                    range: line_index.range(top_condition.span()),
+                    selection_range: line_index.range(top_condition.condition.span()),
+                    children: Some(Vec::new()),
+                };
+
+                let mut current_condition = top_condition;
+                let mut current_children = top_symbol.children.as_mut().unwrap();
                 loop {
-                    match next_else_block {
+                    current_children.extend(collect_symbols(
+                        current_condition.then_block.as_node(),
+                        line_index,
+                    ));
+                    match &current_condition.else_block {
                         None => break,
-                        Some(Either::Left(condition)) => {
-                            symbols.push(DocumentSymbol {
-                                name: format!("else if ({})", condition.condition.span().as_str()),
+                        Some(Either::Left(next_condition)) => {
+                            current_children.push(DocumentSymbol {
+                                name: format!(
+                                    "else if ({})",
+                                    next_condition.condition.span().as_str()
+                                ),
                                 detail: None,
                                 kind: SymbolKind::NAMESPACE,
                                 tags: None,
                                 deprecated: None,
-                                range: line_index.range(condition.span()),
-                                selection_range: line_index.range(condition.condition.span()),
-                                children: Some(collect_symbols(
-                                    condition.then_block.as_node(),
-                                    line_index,
-                                )),
+                                range: line_index.range(next_condition.span()),
+                                selection_range: line_index.range(next_condition.condition.span()),
+                                children: Some(Vec::new()),
                             });
-                            next_else_block = &condition.else_block;
+                            current_children = current_children
+                                .last_mut()
+                                .unwrap()
+                                .children
+                                .as_mut()
+                                .unwrap();
+                            current_condition = next_condition;
                         }
-                        Some(Either::Right(block)) => {
-                            symbols.push(DocumentSymbol {
+                        Some(Either::Right(else_block)) => {
+                            current_children.push(DocumentSymbol {
                                 name: "else".to_string(),
                                 detail: None,
                                 kind: SymbolKind::NAMESPACE,
                                 tags: None,
                                 deprecated: None,
-                                range: line_index.range(block.span()),
-                                selection_range: line_index.range(block.span()),
-                                children: Some(collect_symbols(block.as_node(), line_index)),
+                                range: line_index.range(else_block.span()),
+                                selection_range: line_index.range(else_block.span()),
+                                children: Some(collect_symbols(else_block.as_node(), line_index)),
                             });
                             break;
                         }
                     }
                 }
+
+                symbols.push(top_symbol);
             }
             Statement::Unknown(_) => {}
             Statement::UnmatchedBrace(_) => {}
