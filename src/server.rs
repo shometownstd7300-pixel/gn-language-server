@@ -159,17 +159,39 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let links = current_file
-            .templates_at(ident.span.start())
-            .into_iter()
-            .filter(|template| template.name == ident.name)
-            .map(|template| LocationLink {
-                origin_selection_range: Some(current_file.document.line_index.range(ident.span)),
-                target_uri: Url::from_file_path(&template.document.path).unwrap(),
-                target_range: template.document.line_index.range(template.span),
-                target_selection_range: template.document.line_index.range(template.header),
-            })
-            .collect();
+        let mut links: Vec<LocationLink> = Vec::new();
+
+        // Check templates.
+        links.extend(
+            current_file
+                .templates_at(ident.span.start())
+                .into_iter()
+                .filter(|template| template.name == ident.name)
+                .map(|template| LocationLink {
+                    origin_selection_range: Some(
+                        current_file.document.line_index.range(ident.span),
+                    ),
+                    target_uri: Url::from_file_path(&template.document.path).unwrap(),
+                    target_range: template.document.line_index.range(template.span),
+                    target_selection_range: template.document.line_index.range(template.header),
+                }),
+        );
+
+        // Check variables.
+        links.extend(
+            current_file
+                .variables_at(ident.span.start())
+                .into_iter()
+                .filter(|variable| variable.name == ident.name)
+                .map(|variable| LocationLink {
+                    origin_selection_range: Some(
+                        current_file.document.line_index.range(ident.span),
+                    ),
+                    target_uri: Url::from_file_path(&variable.document.path).unwrap(),
+                    target_range: variable.document.line_index.range(variable.span),
+                    target_selection_range: variable.document.line_index.range(variable.span),
+                }),
+        );
 
         Ok(Some(GotoDefinitionResponse::Link(links)))
     }
