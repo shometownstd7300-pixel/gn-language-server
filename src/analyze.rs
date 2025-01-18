@@ -159,15 +159,15 @@ pub struct AnalyzedFile {
 }
 
 impl AnalyzedFile {
-    pub fn variables_at(&self, pos: usize) -> Vec<&AnalyzedVariable> {
+    pub fn variables_at(&self, pos: usize) -> HashSet<AnalyzedVariable> {
         self.analyzed_root.variables_at(pos)
     }
 
-    pub fn templates_at(&self, pos: usize) -> Vec<&AnalyzedTemplate> {
+    pub fn templates_at(&self, pos: usize) -> HashSet<&AnalyzedTemplate> {
         self.analyzed_root.templates_at(pos)
     }
 
-    pub fn targets_at(&self, pos: usize) -> Vec<&AnalyzedTarget> {
+    pub fn targets_at(&self, pos: usize) -> HashSet<&AnalyzedTarget> {
         self.analyzed_root.targets_at(pos)
     }
 }
@@ -195,13 +195,31 @@ pub struct AnalyzedBlock<'i> {
 }
 
 impl<'i> AnalyzedBlock<'i> {
-    pub fn variables_at(&'i self, pos: usize) -> Vec<&'i AnalyzedVariable<'i>> {
-        let mut variables = Vec::new();
+    pub fn variables_at(&'i self, pos: usize) -> HashSet<AnalyzedVariable<'i>> {
+        let mut variables = HashSet::new();
         for statement in &self.statements {
             match statement {
-                AnalyzedStatement::Variable(variable) => {
-                    if variable.span.end() <= pos {
-                        variables.push(variable);
+                AnalyzedStatement::NewVariable(new_variable) => {
+                    if new_variable.span.end() <= pos {
+                        variables.insert(AnalyzedVariable {
+                            name: new_variable.name,
+                            value: Some(new_variable.value.clone()),
+                            document: new_variable.document,
+                            span: new_variable.span,
+                        });
+                    }
+                }
+                AnalyzedStatement::ModifyVariable(modification) => {
+                    if modification.span.end() <= pos {
+                        variables = variables
+                            .into_iter()
+                            .map(|mut variable| {
+                                if variable.name == modification.name {
+                                    variable.value = None;
+                                }
+                                variable
+                            })
+                            .collect();
                     }
                 }
                 AnalyzedStatement::Conditions(blocks) => {
@@ -219,7 +237,7 @@ impl<'i> AnalyzedBlock<'i> {
                 }
                 AnalyzedStatement::Import(import) => {
                     if import.span.end() <= pos {
-                        variables.extend(import.file.analyzed_root.variables.iter());
+                        variables.extend(import.file.analyzed_root.variables.clone());
                     }
                 }
                 AnalyzedStatement::DeclareArgs(block) => {
@@ -230,7 +248,9 @@ impl<'i> AnalyzedBlock<'i> {
                     }
                 }
                 AnalyzedStatement::NewScope(block) => {
-                    variables.extend(block.variables_at(pos));
+                    if block.span.start() < pos && pos < block.span.end() {
+                        variables.extend(block.variables_at(pos));
+                    }
                 }
                 AnalyzedStatement::Template(_) | AnalyzedStatement::Target(_) => {}
             }
@@ -238,8 +258,8 @@ impl<'i> AnalyzedBlock<'i> {
         variables
     }
 
-    pub fn templates_at(&'i self, pos: usize) -> Vec<&'i AnalyzedTemplate<'i>> {
-        let mut templates = Vec::new();
+    pub fn templates_at(&'i self, pos: usize) -> HashSet<&'i AnalyzedTemplate<'i>> {
+        let mut templates = HashSet::new();
         for statement in &self.statements {
             match statement {
                 AnalyzedStatement::Conditions(blocks) => {
@@ -262,7 +282,7 @@ impl<'i> AnalyzedBlock<'i> {
                 }
                 AnalyzedStatement::Template(template) => {
                     if template.span.end() <= pos {
-                        templates.push(template);
+                        templates.insert(template);
                     }
                 }
                 AnalyzedStatement::NewScope(block) => {
@@ -270,7 +290,8 @@ impl<'i> AnalyzedBlock<'i> {
                         templates.extend(block.templates_at(pos));
                     }
                 }
-                AnalyzedStatement::Variable(_)
+                AnalyzedStatement::NewVariable(_)
+                | AnalyzedStatement::ModifyVariable(_)
                 | AnalyzedStatement::DeclareArgs(_)
                 | AnalyzedStatement::Target(_) => {}
             }
@@ -278,8 +299,8 @@ impl<'i> AnalyzedBlock<'i> {
         templates
     }
 
-    pub fn targets_at(&'i self, pos: usize) -> Vec<&'i AnalyzedTarget<'i>> {
-        let mut targets = Vec::new();
+    pub fn targets_at(&'i self, pos: usize) -> HashSet<&'i AnalyzedTarget<'i>> {
+        let mut targets = HashSet::new();
         for statement in &self.statements {
             match statement {
                 AnalyzedStatement::Conditions(blocks) => {
@@ -302,7 +323,7 @@ impl<'i> AnalyzedBlock<'i> {
                 }
                 AnalyzedStatement::Target(target) => {
                     if target.span.end() <= pos {
-                        targets.push(target);
+                        targets.insert(target);
                     }
                 }
                 AnalyzedStatement::NewScope(block) => {
@@ -310,7 +331,8 @@ impl<'i> AnalyzedBlock<'i> {
                         targets.extend(block.targets_at(pos));
                     }
                 }
-                AnalyzedStatement::Variable(_)
+                AnalyzedStatement::NewVariable(_)
+                | AnalyzedStatement::ModifyVariable(_)
                 | AnalyzedStatement::DeclareArgs(_)
                 | AnalyzedStatement::Template(_) => {}
             }
@@ -345,7 +367,8 @@ pub enum AnalyzedStatement<'i> {
     Conditions(Vec<AnalyzedBlock<'i>>),
     Import(AnalyzedImport<'i>),
     DeclareArgs(AnalyzedBlock<'i>),
-    Variable(AnalyzedVariable<'i>),
+    NewVariable(AnalyzedNewVariable<'i>),
+    ModifyVariable(AnalyzedModifyVariable<'i>),
     Template(AnalyzedTemplate<'i>),
     Target(AnalyzedTarget<'i>),
     NewScope(AnalyzedBlock<'i>),
@@ -358,6 +381,22 @@ pub struct AnalyzedImport<'i> {
 
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct AnalyzedVariable<'i> {
+    pub name: &'i str,
+    pub value: Option<Expr<'i>>,
+    pub document: &'i Document,
+    pub span: Span<'i>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct AnalyzedNewVariable<'i> {
+    pub name: &'i str,
+    pub value: Expr<'i>,
+    pub document: &'i Document,
+    pub span: Span<'i>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct AnalyzedModifyVariable<'i> {
     pub name: &'i str,
     pub document: &'i Document,
     pub span: Span<'i>,
@@ -751,14 +790,28 @@ impl Analyzer {
                 match statement {
                     Statement::Assignment(assignment) => {
                         let mut statements = Vec::new();
-                        if let LValue::Identifier(identifier) = &assignment.lvalue {
-                            if assignment.op == AssignOp::Assign {
-                                statements.push(AnalyzedStatement::Variable(AnalyzedVariable {
-                                    name: identifier.name,
+                        let name = match &assignment.lvalue {
+                            LValue::Identifier(identifier) => identifier.name,
+                            LValue::ArrayAccess(array_access) => array_access.array.name,
+                            LValue::ScopeAccess(scope_access) => scope_access.scope.name,
+                        };
+                        if assignment.op == AssignOp::Assign
+                            && matches!(&assignment.lvalue, LValue::Identifier(_))
+                        {
+                            statements.push(AnalyzedStatement::NewVariable(AnalyzedNewVariable {
+                                name,
+                                value: (*assignment.rvalue).clone(),
+                                document,
+                                span: assignment.span,
+                            }));
+                        } else {
+                            statements.push(AnalyzedStatement::ModifyVariable(
+                                AnalyzedModifyVariable {
+                                    name,
                                     document,
                                     span: assignment.span,
-                                }));
-                            }
+                                },
+                            ));
                         }
                         statements.extend(self.analyze_fat_expr(
                             &assignment.rvalue,
@@ -991,13 +1044,34 @@ impl Analyzer {
             match statement {
                 Statement::Assignment(assignment) => {
                     if let LValue::Identifier(identifier) = &assignment.lvalue {
-                        if assignment.op == AssignOp::Assign && is_exported(identifier.name) {
+                        if is_exported(identifier.name) && assignment.op == AssignOp::Assign {
                             analyzed_block.variables.insert(AnalyzedVariable {
                                 name: identifier.name,
+                                value: Some((*assignment.rvalue).clone()),
                                 document,
                                 span: assignment.span,
                             });
                         }
+                    }
+                    let name = match &assignment.lvalue {
+                        LValue::Identifier(identifier) => identifier.name,
+                        LValue::ArrayAccess(array_access) => array_access.array.name,
+                        LValue::ScopeAccess(scope_access) => scope_access.scope.name,
+                    };
+                    if is_exported(name)
+                        && (assignment.op != AssignOp::Assign
+                            || !matches!(&assignment.lvalue, LValue::Identifier(_)))
+                    {
+                        analyzed_block.variables = analyzed_block
+                            .variables
+                            .into_iter()
+                            .map(|mut variable| {
+                                if variable.name == name {
+                                    variable.value = None;
+                                }
+                                variable
+                            })
+                            .collect();
                     }
                 }
                 Statement::Call(call) => match call.function.name {

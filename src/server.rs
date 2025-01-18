@@ -197,14 +197,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        // Check builtin rules.
-        if let Some(symbol) = BUILTINS.all().find(|symbol| symbol.name == ident.name) {
-            let contents = vec![MarkedString::from_markdown(symbol.doc.to_string())];
-            return Ok(Some(Hover {
-                contents: HoverContents::Array(contents),
-                range: Some(current_file.document.line_index.range(ident.span)),
-            }));
-        }
+        let mut docs: Vec<Vec<MarkedString>> = Vec::new();
 
         // Check templates.
         let templates: Vec<_> = current_file
@@ -213,13 +206,12 @@ impl LanguageServer for Backend {
             .filter(|template| template.name == ident.name)
             .sorted_by_key(|template| (&template.document.path, template.span.start()))
             .collect();
-        if let Some(template) = templates.first() {
+        for template in templates {
             let mut contents = vec![MarkedString::from_language_code(
                 "text".to_string(),
                 format!("template(\"{}\") {{ ... }}", template.name),
             )];
             if let Some(comments) = &template.comments {
-                contents.push(MarkedString::from_markdown("---".to_string()));
                 contents.push(MarkedString::from_language_code(
                     "text".to_string(),
                     comments.clone(),
@@ -236,11 +228,7 @@ impl LanguageServer for Backend {
                     .line
                     + 1
             )));
-
-            return Ok(Some(Hover {
-                contents: HoverContents::Array(contents),
-                range: Some(current_file.document.line_index.range(ident.span)),
-            }));
+            docs.push(contents);
         }
 
         // Check variables.
@@ -250,25 +238,38 @@ impl LanguageServer for Backend {
             .filter(|variable| variable.name == ident.name)
             .sorted_by_key(|variable| (&variable.document.path, variable.span.start()))
             .collect();
-        if let Some(variable) = variables.first() {
-            let mut contents = vec![MarkedString::from_language_code(
+        for variable in variables {
+            let mut contents = Vec::new();
+            let value = match &variable.value {
+                Some(expr) if expr.span().as_str().len() <= 100 => expr.span().as_str(),
+                _ => "...",
+            };
+            contents.push(MarkedString::from_language_code(
                 "text".to_string(),
-                format!("{} = ...", variable.name),
-            )];
-            // TODO: Add comments information.
+                format!("{} = {}", variable.name, value),
+            ));
             contents.push(MarkedString::from_markdown(format!(
                 "Go to [Initial Assignment]({}#L{})",
                 Url::from_file_path(&variable.document.path).unwrap(),
                 variable.document.line_index.range(variable.span).start.line + 1
             )));
-
-            return Ok(Some(Hover {
-                contents: HoverContents::Array(contents),
-                range: Some(current_file.document.line_index.range(ident.span)),
-            }));
+            docs.push(contents);
         }
 
-        Ok(None)
+        // Check builtin rules.
+        if let Some(symbol) = BUILTINS.all().find(|symbol| symbol.name == ident.name) {
+            docs.push(vec![MarkedString::from_markdown(symbol.doc.to_string())]);
+        }
+
+        if docs.is_empty() {
+            return Ok(None);
+        }
+
+        let contents = docs.join(&MarkedString::from_markdown("---".to_string()));
+        return Ok(Some(Hover {
+            contents: HoverContents::Array(contents),
+            range: Some(current_file.document.line_index.range(ident.span)),
+        }));
     }
 
     async fn document_link(
