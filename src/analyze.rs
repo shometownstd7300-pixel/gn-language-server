@@ -25,7 +25,7 @@ use pest::Span;
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::{
-    ast::{parse, AssignOp, Block, Expr, LValue, Node, PrimaryExpr, Statement},
+    ast::{parse, AssignOp, Assignment, Block, Expr, LValue, Node, PrimaryExpr, Statement},
     storage::{Document, DocumentStorage},
     util::{parse_simple_literal, LineIndex},
 };
@@ -160,7 +160,9 @@ pub struct AnalyzedFile {
 
 impl AnalyzedFile {
     pub fn variables_at(&self, pos: usize) -> HashSet<AnalyzedVariable> {
-        self.analyzed_root.variables_at(pos)
+        let mut variables = HashSet::new();
+        self.analyzed_root.variables_at(pos, false, &mut variables);
+        variables
     }
 
     pub fn templates_at(&self, pos: usize) -> HashSet<&AnalyzedTemplate> {
@@ -195,43 +197,56 @@ pub struct AnalyzedBlock<'i> {
 }
 
 impl<'i> AnalyzedBlock<'i> {
-    pub fn variables_at(&'i self, pos: usize) -> HashSet<AnalyzedVariable<'i>> {
-        let mut variables = HashSet::new();
+    pub fn variables_at(
+        &'i self,
+        pos: usize,
+        modify_only: bool,
+        variables: &mut HashSet<AnalyzedVariable<'i>>,
+    ) {
         for statement in &self.statements {
             match statement {
                 AnalyzedStatement::NewVariable(new_variable) => {
-                    if new_variable.span.end() <= pos {
+                    if !modify_only
+                        && (new_variable.span.end() <= pos
+                            || (new_variable.assignment.lvalue.span().start() <= pos
+                                && pos <= new_variable.assignment.lvalue.span().end()))
+                    {
                         variables.insert(AnalyzedVariable {
                             name: new_variable.name,
-                            value: Some(new_variable.value.clone()),
+                            assignments: vec![new_variable.assignment.clone()],
                             document: new_variable.document,
                             span: new_variable.span,
                         });
                     }
                 }
                 AnalyzedStatement::ModifyVariable(modification) => {
-                    if modification.span.end() <= pos {
-                        variables = variables
-                            .into_iter()
-                            .map(|mut variable| {
-                                if variable.name == modification.name {
-                                    variable.value = None;
-                                }
-                                variable
-                            })
-                            .collect();
-                    }
+                    // Consider variable modifications as long as the containing block is processed,
+                    // regardless of their positions.
+                    let tmp_variables = std::mem::take(variables);
+                    *variables = tmp_variables
+                        .into_iter()
+                        .map(|mut variable| {
+                            if variable.name == modification.name {
+                                variable.assignments.push(modification.assignment.clone());
+                            }
+                            variable
+                        })
+                        .collect();
                 }
                 AnalyzedStatement::Conditions(blocks) => {
                     if blocks.last().unwrap().span.end() <= pos {
                         for block in blocks {
-                            variables.extend(block.variables_at(pos));
+                            block.variables_at(pos, modify_only, variables);
+                        }
+                    } else if blocks.first().unwrap().span.start() <= pos {
+                        for block in blocks {
+                            if block.span.start() <= pos && pos <= block.span.end() {
+                                block.variables_at(pos, modify_only, variables);
+                            }
                         }
                     } else {
                         for block in blocks {
-                            if block.span.start() <= pos && pos <= block.span.end() {
-                                variables.extend(block.variables_at(pos));
-                            }
+                            block.variables_at(pos, true, variables);
                         }
                     }
                 }
@@ -243,19 +258,19 @@ impl<'i> AnalyzedBlock<'i> {
                 AnalyzedStatement::DeclareArgs(block) => {
                     // A variable defined in declare_args() cannot be read in the later part of the
                     // same block.
-                    if block.span.end() <= pos {
-                        variables.extend(block.variables_at(pos));
+                    if !modify_only && block.span.end() <= pos {
+                        block.variables_at(pos, modify_only, variables);
                     }
                 }
                 AnalyzedStatement::NewScope(block) => {
                     if block.span.start() < pos && pos < block.span.end() {
-                        variables.extend(block.variables_at(pos));
+                        block.variables_at(pos, modify_only, variables);
+                        return;
                     }
                 }
                 AnalyzedStatement::Template(_) | AnalyzedStatement::Target(_) => {}
             }
         }
-        variables
     }
 
     pub fn templates_at(&'i self, pos: usize) -> HashSet<&'i AnalyzedTemplate<'i>> {
@@ -382,7 +397,7 @@ pub struct AnalyzedImport<'i> {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct AnalyzedVariable<'i> {
     pub name: &'i str,
-    pub value: Option<Expr<'i>>,
+    pub assignments: Vec<Assignment<'i>>,
     pub document: &'i Document,
     pub span: Span<'i>,
 }
@@ -390,7 +405,7 @@ pub struct AnalyzedVariable<'i> {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct AnalyzedNewVariable<'i> {
     pub name: &'i str,
-    pub value: Expr<'i>,
+    pub assignment: Assignment<'i>,
     pub document: &'i Document,
     pub span: Span<'i>,
 }
@@ -398,6 +413,7 @@ pub struct AnalyzedNewVariable<'i> {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct AnalyzedModifyVariable<'i> {
     pub name: &'i str,
+    pub assignment: Assignment<'i>,
     pub document: &'i Document,
     pub span: Span<'i>,
 }
@@ -468,7 +484,7 @@ fn collect_links<'i>(
         .filter_map(|string| {
             let content = parse_simple_literal(string.raw_value)?;
             if !content.contains(":") && content.contains(".") {
-                let path = workspace.resolve_path(content, path);
+                let path = workspace.resolve_path(content, path.parent().unwrap());
                 if let Ok(true) = path.try_exists() {
                     return Some(Link::File {
                         path: path.to_path_buf(),
@@ -814,7 +830,7 @@ impl Analyzer {
                         {
                             statements.push(AnalyzedStatement::NewVariable(AnalyzedNewVariable {
                                 name,
-                                value: (*assignment.rvalue).clone(),
+                                assignment: assignment.clone(),
                                 document,
                                 span: assignment.span,
                             }));
@@ -822,6 +838,7 @@ impl Analyzer {
                             statements.push(AnalyzedStatement::ModifyVariable(
                                 AnalyzedModifyVariable {
                                     name,
+                                    assignment: assignment.clone(),
                                     document,
                                     span: assignment.span,
                                 },
@@ -1020,7 +1037,9 @@ impl Analyzer {
                     }
                     Ok(statements)
                 }
-                PrimaryExpr::ParenExpr(expr) => self.analyze_fat_expr(expr, workspace, document),
+                PrimaryExpr::ParenExpr(paren_expr) => {
+                    self.analyze_fat_expr(&paren_expr.expr, workspace, document)
+                }
                 PrimaryExpr::List(list_literal) => Ok(list_literal
                     .values
                     .iter()
@@ -1061,7 +1080,7 @@ impl Analyzer {
                         if is_exported(identifier.name) && assignment.op == AssignOp::Assign {
                             analyzed_block.variables.insert(AnalyzedVariable {
                                 name: identifier.name,
-                                value: Some((*assignment.rvalue).clone()),
+                                assignments: vec![assignment.clone()],
                                 document,
                                 span: assignment.span,
                             });
@@ -1081,7 +1100,7 @@ impl Analyzer {
                             .into_iter()
                             .map(|mut variable| {
                                 if variable.name == name {
-                                    variable.value = None;
+                                    variable.assignments.push(assignment.clone());
                                 }
                                 variable
                             })

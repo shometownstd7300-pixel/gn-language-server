@@ -181,15 +181,20 @@ impl LanguageServer for Backend {
         links.extend(
             current_file
                 .variables_at(ident.span.start())
-                .into_iter()
+                .iter()
                 .filter(|variable| variable.name == ident.name)
-                .map(|variable| LocationLink {
-                    origin_selection_range: Some(
-                        current_file.document.line_index.range(ident.span),
-                    ),
-                    target_uri: Url::from_file_path(&variable.document.path).unwrap(),
-                    target_range: variable.document.line_index.range(variable.span),
-                    target_selection_range: variable.document.line_index.range(variable.span),
+                .flat_map(|variable| {
+                    variable.assignments.iter().map(|assignment| LocationLink {
+                        origin_selection_range: Some(
+                            current_file.document.line_index.range(ident.span),
+                        ),
+                        target_uri: Url::from_file_path(&variable.document.path).unwrap(),
+                        target_range: variable.document.line_index.range(assignment.span),
+                        target_selection_range: variable
+                            .document
+                            .line_index
+                            .range(assignment.lvalue.span()),
+                    })
                 }),
         );
 
@@ -239,16 +244,15 @@ impl LanguageServer for Backend {
                     comments.clone(),
                 ));
             };
+            let position = template
+                .document
+                .line_index
+                .position(template.header.start());
             contents.push(MarkedString::from_markdown(format!(
-                "Go to [Definition]({}#L{})",
+                "Go to [Definition]({}#L{},{})",
                 Url::from_file_path(&template.document.path).unwrap(),
-                template
-                    .document
-                    .line_index
-                    .range(template.header)
-                    .start
-                    .line
-                    + 1
+                position.line + 1,
+                position.character + 1,
             )));
             docs.push(contents);
         }
@@ -261,21 +265,32 @@ impl LanguageServer for Backend {
             .sorted_by_key(|variable| (&variable.document.path, variable.span.start()))
             .collect();
         for variable in variables {
-            let mut contents = Vec::new();
-            let value = match &variable.value {
-                Some(expr) if expr.span().as_str().len() <= 100 => expr.span().as_str(),
-                _ => "...",
-            };
-            contents.push(MarkedString::from_language_code(
-                "text".to_string(),
-                format!("{} = {}", variable.name, value),
-            ));
-            contents.push(MarkedString::from_markdown(format!(
-                "Go to [Initial Assignment]({}#L{})",
-                Url::from_file_path(&variable.document.path).unwrap(),
-                variable.document.line_index.range(variable.span).start.line + 1
-            )));
-            docs.push(contents);
+            for assignment in &variable.assignments {
+                let value = if assignment.rvalue.span().as_str().len() <= 100 {
+                    assignment.rvalue.span().as_str()
+                } else {
+                    "..."
+                };
+                let position = variable
+                    .document
+                    .line_index
+                    .position(assignment.span.start());
+                docs.push(vec![
+                    MarkedString::from_language_code(
+                        "text".to_string(),
+                        format!("{} {} {}", variable.name, assignment.op, value),
+                    ),
+                    MarkedString::from_markdown(format!(
+                        "[{}:{}:{}]({}#L{},{})",
+                        variable.document.path.display(),
+                        position.line + 1,
+                        position.character + 1,
+                        Url::from_file_path(&variable.document.path).unwrap(),
+                        position.line + 1,
+                        position.character + 1,
+                    )),
+                ]);
+            }
         }
 
         // Check builtin rules.

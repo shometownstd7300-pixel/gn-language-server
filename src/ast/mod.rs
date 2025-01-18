@@ -341,7 +341,7 @@ pub enum PrimaryExpr<'i> {
     ArrayAccess(ArrayAccess<'i>),
     ScopeAccess(ScopeAccess<'i>),
     Block(Block<'i>),
-    ParenExpr(Box<Expr<'i>>),
+    ParenExpr(ParenExpr<'i>),
     List(ListLiteral<'i>),
 }
 
@@ -359,7 +359,7 @@ impl<'i> Node<'i> for PrimaryExpr<'i> {
             PrimaryExpr::ArrayAccess(array_access) => vec![array_access],
             PrimaryExpr::ScopeAccess(scope_access) => vec![scope_access],
             PrimaryExpr::Block(block) => vec![block],
-            PrimaryExpr::ParenExpr(expr) => vec![&**expr],
+            PrimaryExpr::ParenExpr(paren_expr) => vec![paren_expr],
             PrimaryExpr::List(list) => vec![list],
         }
     }
@@ -523,6 +523,26 @@ impl<'i> Node<'i> for StringLiteral<'i> {
 
     fn as_string(&self) -> Option<&StringLiteral<'i>> {
         Some(self)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ParenExpr<'i> {
+    pub expr: Box<Expr<'i>>,
+    pub span: Span<'i>,
+}
+
+impl<'i> Node<'i> for ParenExpr<'i> {
+    fn as_node(&self) -> &dyn Node<'i> {
+        self
+    }
+
+    fn children(&self) -> Vec<&dyn Node<'i>> {
+        vec![&*self.expr]
+    }
+
+    fn span(&self) -> Span<'i> {
+        self.span
     }
 }
 

@@ -30,7 +30,9 @@ scope_access = !{ identifier ~ "." ~ identifier }
 expr = !{ prefix* ~ primary ~ (infix ~ prefix* ~ primary)* }
 prefix = _{ not }
 infix = _{ add | sub | le | lt | ge | gt | eq | ne | and | or }
-primary = _{ call | array_access | scope_access | block | "(" ~ expr ~ ")" | "[" ~ expr_list ~ ","? ~ "]" | integer | string | identifier}
+primary = _{ call | array_access | scope_access | block | paren_expr | list | integer | string | identifier}
+paren_expr = !{ "(" ~ expr ~ ")" }
+list = !{ "[" ~ expr_list ~ ","? ~ "]" }
 expr_list = !{ (expr ~ ("," ~ expr)*)? }
 
 assign_op = { "=" | "+=" | "-=" }

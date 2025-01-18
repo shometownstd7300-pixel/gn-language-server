@@ -67,7 +67,9 @@ fn convert_string(pair: Pair<Rule>) -> StringLiteral {
 }
 
 fn convert_list(pair: Pair<Rule>) -> ListLiteral {
+    assert!(matches!(pair.as_rule(), Rule::list));
     let span = pair.as_span();
+    let pair = pair.into_inner().exactly_one().unwrap();
     let values = convert_expr_list(pair);
     ListLiteral { values, span }
 }
@@ -129,8 +131,8 @@ fn convert_primary(pair: Pair<Rule>) -> PrimaryExpr {
         Rule::array_access => PrimaryExpr::ArrayAccess(convert_array_access(pair)),
         Rule::scope_access => PrimaryExpr::ScopeAccess(convert_scope_access(pair)),
         Rule::block => PrimaryExpr::Block(convert_block(pair)),
-        Rule::expr => PrimaryExpr::ParenExpr(Box::new(convert_expr(pair))),
-        Rule::expr_list => PrimaryExpr::List(convert_list(pair)),
+        Rule::paren_expr => PrimaryExpr::ParenExpr(convert_paren_expr(pair)),
+        Rule::list => PrimaryExpr::List(convert_list(pair)),
         _ => unreachable!(),
     }
 }
@@ -179,6 +181,16 @@ fn convert_expr(pair: Pair<Rule>) -> Expr {
             })
         })
         .parse(pairs)
+}
+
+fn convert_paren_expr(pair: Pair<Rule>) -> ParenExpr {
+    assert!(matches!(pair.as_rule(), Rule::paren_expr));
+    let span = pair.as_span();
+    let expr = convert_expr(pair.into_inner().exactly_one().unwrap());
+    ParenExpr {
+        expr: Box::new(expr),
+        span,
+    }
 }
 
 fn convert_expr_list(pair: Pair<Rule>) -> Vec<Expr> {
