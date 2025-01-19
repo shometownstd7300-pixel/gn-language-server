@@ -75,7 +75,7 @@ impl<'i, 'n, T> FilterWalk<'i, 'n, T> {
     }
 }
 
-impl<'i, 'n, T> Iterator for FilterWalk<'i, 'n, T> {
+impl<'n, T> Iterator for FilterWalk<'_, 'n, T> {
     type Item = &'n T;
 
     fn next(&mut self) -> Option<Self::Item> {

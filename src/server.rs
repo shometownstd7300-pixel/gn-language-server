@@ -178,25 +178,25 @@ impl LanguageServer for Backend {
         );
 
         // Check variables.
-        links.extend(
-            current_file
-                .variables_at(ident.span.start())
-                .iter()
-                .filter(|variable| variable.name == ident.name)
-                .flat_map(|variable| {
-                    variable.assignments.iter().map(|assignment| LocationLink {
-                        origin_selection_range: Some(
-                            current_file.document.line_index.range(ident.span),
-                        ),
-                        target_uri: Url::from_file_path(&variable.document.path).unwrap(),
-                        target_range: variable.document.line_index.range(assignment.span),
-                        target_selection_range: variable
-                            .document
-                            .line_index
-                            .range(assignment.lvalue.span()),
-                    })
-                }),
-        );
+        let scope = current_file.scope_at(ident.span.start());
+        if let Some(variable) = scope.get(ident.name) {
+            links.extend(variable.assignments.iter().map(|assignment| {
+                LocationLink {
+                    origin_selection_range: Some(
+                        current_file.document.line_index.range(ident.span),
+                    ),
+                    target_uri: Url::from_file_path(&assignment.document.path).unwrap(),
+                    target_range: assignment
+                        .document
+                        .line_index
+                        .range(assignment.assignment.span),
+                    target_selection_range: assignment
+                        .document
+                        .line_index
+                        .range(assignment.assignment.lvalue.span()),
+                }
+            }))
+        }
 
         Ok(Some(GotoDefinitionResponse::Link(links)))
     }
@@ -258,34 +258,37 @@ impl LanguageServer for Backend {
         }
 
         // Check variables.
-        let variables: Vec<_> = current_file
-            .variables_at(ident.span.start())
-            .into_iter()
-            .filter(|variable| variable.name == ident.name)
-            .sorted_by_key(|variable| (&variable.document.path, variable.span.start()))
-            .collect();
-        for variable in variables {
-            for assignment in &variable.assignments {
-                let value = if assignment.rvalue.span().as_str().len() <= 100 {
-                    assignment.rvalue.span().as_str()
-                } else {
+        let scope = current_file.scope_at(ident.span.start());
+        if let Some(variable) = scope.get(ident.name) {
+            let sorted_assignments = variable
+                .assignments
+                .iter()
+                .sorted_by_key(|a| (&a.document.path, a.assignment.span.start()));
+            for assignment in sorted_assignments {
+                let raw_value = assignment.assignment.rvalue.span().as_str();
+                let display_value = if raw_value.contains('\n') {
                     "..."
+                } else {
+                    raw_value
                 };
-                let position = variable
+                let position = assignment
                     .document
                     .line_index
-                    .position(assignment.span.start());
+                    .position(assignment.assignment.span.start());
                 docs.push(vec![
                     MarkedString::from_language_code(
                         "text".to_string(),
-                        format!("{} {} {}", variable.name, assignment.op, value),
+                        format!(
+                            "{} {} {}",
+                            variable.name, assignment.assignment.op, display_value
+                        ),
                     ),
                     MarkedString::from_markdown(format!(
                         "[{}:{}:{}]({}#L{},{})",
-                        variable.document.path.display(),
+                        assignment.document.path.display(),
                         position.line + 1,
                         position.character + 1,
-                        Url::from_file_path(&variable.document.path).unwrap(),
+                        Url::from_file_path(&assignment.document.path).unwrap(),
                         position.line + 1,
                         position.character + 1,
                     )),

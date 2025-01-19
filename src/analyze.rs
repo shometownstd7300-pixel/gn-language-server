@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     io::ErrorKind,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
 };
 
@@ -108,7 +109,7 @@ fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
                 ),
             ));
         };
-        let Some(name) = parse_simple_literal(&string.raw_value) else {
+        let Some(name) = parse_simple_literal(string.raw_value) else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
@@ -150,19 +151,17 @@ fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
 }
 
 pub struct AnalyzedFile {
-    pub document: Arc<Document>,
+    pub document: Pin<Arc<Document>>,
     pub workspace: WorkspaceContext,
-    pub ast_root: Block<'static>,
-    pub analyzed_root: AnalyzedBlock<'static>,
+    pub ast_root: Pin<Box<Block<'static>>>,
+    pub analyzed_root: AnalyzedBlock<'static, 'static>,
     pub links: Vec<Link<'static>>,
     pub symbols: Vec<DocumentSymbol>,
 }
 
 impl AnalyzedFile {
-    pub fn variables_at(&self, pos: usize) -> HashSet<AnalyzedVariable> {
-        let mut variables = HashSet::new();
-        self.analyzed_root.variables_at(pos, false, &mut variables);
-        variables
+    pub fn scope_at(&self, pos: usize) -> AnalyzedScope {
+        self.analyzed_root.scope_at(pos, None)
     }
 
     pub fn templates_at(&self, pos: usize) -> HashSet<&AnalyzedTemplate> {
@@ -175,102 +174,72 @@ impl AnalyzedFile {
 }
 
 pub struct ThinAnalyzedFile {
-    pub document: Arc<Document>,
+    pub document: Pin<Arc<Document>>,
     pub workspace: WorkspaceContext,
-    pub analyzed_root: ThinAnalyzedBlock<'static>,
+    #[allow(unused)] // Backing analyzed_root
+    pub ast_root: Pin<Box<Block<'static>>>,
+    pub analyzed_root: ThinAnalyzedBlock<'static, 'static>,
 }
 
 impl ThinAnalyzedFile {
     pub fn empty(path: &Path, workspace: &WorkspaceContext) -> Arc<Self> {
-        let document = Document::empty(path);
+        let document = Arc::pin(Document::empty(path));
+        let ast_root = Box::pin(parse(&document.data));
+        let analyzed_root = ThinAnalyzedBlock::new_top_level();
+        // SAFETY: ast_root's contents are backed by pinned document.
+        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
+        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
+        let analyzed_root =
+            unsafe { std::mem::transmute::<ThinAnalyzedBlock, ThinAnalyzedBlock>(analyzed_root) };
         Arc::new(ThinAnalyzedFile {
             document,
             workspace: workspace.clone(),
-            analyzed_root: ThinAnalyzedBlock::new(),
+            ast_root,
+            analyzed_root,
         })
     }
 }
 
-pub struct AnalyzedBlock<'i> {
-    pub statements: Vec<AnalyzedStatement<'i>>,
+pub struct AnalyzedBlock<'i, 'p> {
+    pub statements: Vec<AnalyzedStatement<'i, 'p>>,
     pub span: Span<'i>,
 }
 
-impl<'i> AnalyzedBlock<'i> {
-    pub fn variables_at(
-        &'i self,
+impl<'i, 'p> AnalyzedBlock<'i, 'p> {
+    fn top_level_statements<'a>(&'a self) -> AnalyzedBlockTopLevelStatements<'i, 'p, 'a> {
+        AnalyzedBlockTopLevelStatements::new(self)
+    }
+
+    pub fn scope_at(
+        &self,
         pos: usize,
-        modify_only: bool,
-        variables: &mut HashSet<AnalyzedVariable<'i>>,
-    ) {
-        for statement in &self.statements {
+        parent: Option<Box<AnalyzedScope<'i, 'p>>>,
+    ) -> AnalyzedScope<'i, 'p> {
+        let mut scope = AnalyzedScope::new(parent);
+
+        // First pass: Collect all variables in the scope.
+        for statement in self.top_level_statements() {
             match statement {
-                AnalyzedStatement::NewVariable(new_variable) => {
-                    if !modify_only
-                        && (new_variable.span.end() <= pos
-                            || (new_variable.assignment.lvalue.span().start() <= pos
-                                && pos <= new_variable.assignment.lvalue.span().end()))
-                    {
-                        variables.insert(AnalyzedVariable {
-                            name: new_variable.name,
-                            assignments: vec![new_variable.assignment.clone()],
-                            document: new_variable.document,
-                            span: new_variable.span,
-                        });
-                    }
-                }
-                AnalyzedStatement::ModifyVariable(modification) => {
-                    // Consider variable modifications as long as the containing block is processed,
-                    // regardless of their positions.
-                    let tmp_variables = std::mem::take(variables);
-                    *variables = tmp_variables
-                        .into_iter()
-                        .map(|mut variable| {
-                            if variable.name == modification.name {
-                                variable.assignments.push(modification.assignment.clone());
-                            }
-                            variable
-                        })
-                        .collect();
-                }
-                AnalyzedStatement::Conditions(blocks) => {
-                    if blocks.last().unwrap().span.end() <= pos {
-                        for block in blocks {
-                            block.variables_at(pos, modify_only, variables);
-                        }
-                    } else if blocks.first().unwrap().span.start() <= pos {
-                        for block in blocks {
-                            if block.span.start() <= pos && pos <= block.span.end() {
-                                block.variables_at(pos, modify_only, variables);
-                            }
-                        }
-                    } else {
-                        for block in blocks {
-                            block.variables_at(pos, true, variables);
-                        }
-                    }
+                AnalyzedStatement::Assignment(assignment) => {
+                    scope.insert(assignment.clone());
                 }
                 AnalyzedStatement::Import(import) => {
-                    if import.span.end() <= pos {
-                        variables.extend(import.file.analyzed_root.variables.clone());
-                    }
+                    scope.merge(&import.file.analyzed_root.scope);
                 }
-                AnalyzedStatement::DeclareArgs(block) => {
-                    // A variable defined in declare_args() cannot be read in the later part of the
-                    // same block.
-                    if !modify_only && block.span.end() <= pos {
-                        block.variables_at(pos, modify_only, variables);
-                    }
-                }
-                AnalyzedStatement::NewScope(block) => {
-                    if block.span.start() < pos && pos < block.span.end() {
-                        block.variables_at(pos, modify_only, variables);
-                        return;
-                    }
-                }
-                AnalyzedStatement::Template(_) | AnalyzedStatement::Target(_) => {}
+                _ => {}
             }
         }
+
+        // Second pass: Find the subscope that contains the position.
+        for statement in &self.statements {
+            if let AnalyzedStatement::NewScope(block) = statement {
+                if block.span.start() < pos && pos < block.span.end() {
+                    return block.scope_at(pos, Some(Box::new(scope)));
+                }
+            }
+        }
+
+        scope
     }
 
     pub fn templates_at(&'i self, pos: usize) -> HashSet<&'i AnalyzedTemplate<'i>> {
@@ -305,8 +274,7 @@ impl<'i> AnalyzedBlock<'i> {
                         templates.extend(block.templates_at(pos));
                     }
                 }
-                AnalyzedStatement::NewVariable(_)
-                | AnalyzedStatement::ModifyVariable(_)
+                AnalyzedStatement::Assignment(_)
                 | AnalyzedStatement::DeclareArgs(_)
                 | AnalyzedStatement::Target(_) => {}
             }
@@ -346,8 +314,7 @@ impl<'i> AnalyzedBlock<'i> {
                         targets.extend(block.targets_at(pos));
                     }
                 }
-                AnalyzedStatement::NewVariable(_)
-                | AnalyzedStatement::ModifyVariable(_)
+                AnalyzedStatement::Assignment(_)
                 | AnalyzedStatement::DeclareArgs(_)
                 | AnalyzedStatement::Template(_) => {}
             }
@@ -356,37 +323,74 @@ impl<'i> AnalyzedBlock<'i> {
     }
 }
 
-pub struct ThinAnalyzedBlock<'i> {
-    pub variables: HashSet<AnalyzedVariable<'i>>,
+struct AnalyzedBlockTopLevelStatements<'i, 'p, 'a> {
+    stack: Vec<&'a AnalyzedStatement<'i, 'p>>,
+}
+
+impl<'i, 'p, 'a> AnalyzedBlockTopLevelStatements<'i, 'p, 'a> {
+    fn new(block: &'a AnalyzedBlock<'i, 'p>) -> Self {
+        AnalyzedBlockTopLevelStatements {
+            stack: block.statements.iter().rev().collect(),
+        }
+    }
+}
+
+impl<'i, 'p, 'a> Iterator for AnalyzedBlockTopLevelStatements<'i, 'p, 'a> {
+    type Item = &'a AnalyzedStatement<'i, 'p>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(statement) = self.stack.pop() {
+            match statement {
+                AnalyzedStatement::Conditions(blocks) => {
+                    self.stack
+                        .extend(blocks.iter().flat_map(|block| &block.statements).rev());
+                }
+                AnalyzedStatement::DeclareArgs(block) => {
+                    self.stack.extend(block.statements.iter().rev());
+                }
+                AnalyzedStatement::Import(_)
+                | AnalyzedStatement::Assignment(_)
+                | AnalyzedStatement::Template(_)
+                | AnalyzedStatement::Target(_)
+                | AnalyzedStatement::NewScope(_) => {
+                    return Some(statement);
+                }
+            }
+        }
+        None
+    }
+}
+
+pub struct ThinAnalyzedBlock<'i, 'p> {
+    pub scope: AnalyzedScope<'i, 'p>,
     pub templates: HashSet<AnalyzedTemplate<'i>>,
     pub targets: HashSet<AnalyzedTarget<'i>>,
 }
 
-impl ThinAnalyzedBlock<'_> {
-    pub fn new() -> Self {
+impl ThinAnalyzedBlock<'_, '_> {
+    pub fn new_top_level() -> Self {
         ThinAnalyzedBlock {
-            variables: HashSet::new(),
+            scope: AnalyzedScope::new(None),
             templates: HashSet::new(),
             targets: HashSet::new(),
         }
     }
 
     pub fn merge(&mut self, other: &Self) {
-        self.variables.extend(other.variables.clone());
+        self.scope.merge(&other.scope);
         self.templates.extend(other.templates.clone());
         self.targets.extend(other.targets.clone());
     }
 }
 
-pub enum AnalyzedStatement<'i> {
-    Conditions(Vec<AnalyzedBlock<'i>>),
+pub enum AnalyzedStatement<'i, 'p> {
+    Conditions(Vec<AnalyzedBlock<'i, 'p>>),
     Import(AnalyzedImport<'i>),
-    DeclareArgs(AnalyzedBlock<'i>),
-    NewVariable(AnalyzedNewVariable<'i>),
-    ModifyVariable(AnalyzedModifyVariable<'i>),
+    DeclareArgs(AnalyzedBlock<'i, 'p>),
+    Assignment(AnalyzedAssignment<'i, 'p>),
     Template(AnalyzedTemplate<'i>),
     Target(AnalyzedTarget<'i>),
-    NewScope(AnalyzedBlock<'i>),
+    NewScope(AnalyzedBlock<'i, 'p>),
 }
 
 pub struct AnalyzedImport<'i> {
@@ -394,28 +398,61 @@ pub struct AnalyzedImport<'i> {
     pub span: Span<'i>,
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub struct AnalyzedVariable<'i> {
+pub struct AnalyzedScope<'i, 'p> {
+    pub parent: Option<Box<AnalyzedScope<'i, 'p>>>,
+    pub variables: HashMap<&'i str, AnalyzedVariable<'i, 'p>>,
+}
+
+impl<'i, 'p> AnalyzedScope<'i, 'p> {
+    pub fn new(parent: Option<Box<AnalyzedScope<'i, 'p>>>) -> Self {
+        AnalyzedScope {
+            parent,
+            variables: HashMap::new(),
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&AnalyzedVariable<'i, 'p>> {
+        self.variables
+            .get(name)
+            .or_else(|| self.parent.as_ref().and_then(|p| p.get(name)))
+    }
+
+    pub fn insert(&mut self, assignment: AnalyzedAssignment<'i, 'p>) {
+        self.variables
+            .entry(assignment.name)
+            .or_insert_with(|| AnalyzedVariable {
+                name: assignment.name,
+                assignments: HashSet::new(),
+            })
+            .assignments
+            .insert(assignment);
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        for (name, other_variable) in &other.variables {
+            self.variables
+                .entry(name)
+                .or_insert_with(|| AnalyzedVariable {
+                    name,
+                    assignments: HashSet::new(),
+                })
+                .assignments
+                .extend(other_variable.assignments.clone());
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AnalyzedVariable<'i, 'p> {
     pub name: &'i str,
-    pub assignments: Vec<Assignment<'i>>,
-    pub document: &'i Document,
-    pub span: Span<'i>,
+    pub assignments: HashSet<AnalyzedAssignment<'i, 'p>>,
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-pub struct AnalyzedNewVariable<'i> {
+pub struct AnalyzedAssignment<'i, 'p> {
     pub name: &'i str,
-    pub assignment: Assignment<'i>,
+    pub assignment: &'p Assignment<'i>,
     pub document: &'i Document,
-    pub span: Span<'i>,
-}
-
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub struct AnalyzedModifyVariable<'i> {
-    pub name: &'i str,
-    pub assignment: Assignment<'i>,
-    pub document: &'i Document,
-    pub span: Span<'i>,
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -704,10 +741,9 @@ impl Analyzer {
         workspace: &WorkspaceContext,
     ) -> std::io::Result<Arc<AnalyzedFile>> {
         let document = self.storage.read(path)?;
-        let ast_root = parse(&document.data);
+        let ast_root = Box::pin(parse(&document.data));
 
         let mut analyzed_root = self.analyze_fat_block(&ast_root, workspace, &document)?;
-
         // Insert a synthetic import of BUILDCONFIG.gn.
         analyzed_root.statements.insert(
             0,
@@ -721,13 +757,17 @@ impl Analyzer {
             }),
         );
 
-        // SAFETY: *_block's contents are backed by document.data that are guaranteed to have
-        // the identical lifetime because AnalyzedFile in Arc is immutable.
-        let ast_root = unsafe { std::mem::transmute::<Block, Block>(ast_root) };
+        let links = collect_links(&ast_root, path, workspace);
+        let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
+
+        // SAFETY: links' contents are backed by pinned document.
+        let links = unsafe { std::mem::transmute::<Vec<Link>, Vec<Link>>(links) };
+        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
         let analyzed_root =
             unsafe { std::mem::transmute::<AnalyzedBlock, AnalyzedBlock>(analyzed_root) };
-        let links = collect_links(&ast_root, path, workspace);
-        let symbols = collect_symbols(&ast_root, &document.line_index);
+        // SAFETY: ast_root's contents are backed by pinned document.
+        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
+
         Ok(Arc::new(AnalyzedFile {
             document,
             workspace: workspace.clone(),
@@ -792,27 +832,29 @@ impl Analyzer {
             }
             Err(err) => return Err(err),
         };
-        let block = parse(&document.data);
+        let ast_root = Box::pin(parse(&document.data));
+        let analyzed_root = self.analyze_thin_block(&ast_root, workspace, &document, actives)?;
 
-        let analyzed_root = self.analyze_thin_block(&block, workspace, &document, actives)?;
-
-        // SAFETY: analyzed_root's contents are backed by document.data that are guaranteed to have
-        // the identical lifetime because AnalyzedFile in Arc is immutable.
+        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
         let analyzed_root =
             unsafe { std::mem::transmute::<ThinAnalyzedBlock, ThinAnalyzedBlock>(analyzed_root) };
+        // SAFETY: ast_root's contents are backed by pinned document.
+        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
+
         Ok(Arc::new(ThinAnalyzedFile {
             document,
             workspace: workspace.clone(),
+            ast_root,
             analyzed_root,
         }))
     }
 
-    fn analyze_fat_block<'i>(
+    fn analyze_fat_block<'i, 'p>(
         &mut self,
-        block: &Block<'i>,
+        block: &'p Block<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
-    ) -> std::io::Result<AnalyzedBlock<'i>> {
+    ) -> std::io::Result<AnalyzedBlock<'i, 'p>> {
         let statements: Vec<AnalyzedStatement> = block
             .statements
             .iter()
@@ -825,25 +867,11 @@ impl Analyzer {
                             LValue::ArrayAccess(array_access) => array_access.array.name,
                             LValue::ScopeAccess(scope_access) => scope_access.scope.name,
                         };
-                        if assignment.op == AssignOp::Assign
-                            && matches!(&assignment.lvalue, LValue::Identifier(_))
-                        {
-                            statements.push(AnalyzedStatement::NewVariable(AnalyzedNewVariable {
-                                name,
-                                assignment: assignment.clone(),
-                                document,
-                                span: assignment.span,
-                            }));
-                        } else {
-                            statements.push(AnalyzedStatement::ModifyVariable(
-                                AnalyzedModifyVariable {
-                                    name,
-                                    assignment: assignment.clone(),
-                                    document,
-                                    span: assignment.span,
-                                },
-                            ));
-                        }
+                        statements.push(AnalyzedStatement::Assignment(AnalyzedAssignment {
+                            name,
+                            assignment,
+                            document,
+                        }));
                         statements.extend(self.analyze_fat_expr(
                             &assignment.rvalue,
                             workspace,
@@ -1010,12 +1038,12 @@ impl Analyzer {
         })
     }
 
-    fn analyze_fat_expr<'i>(
+    fn analyze_fat_expr<'i, 'p>(
         &mut self,
-        expr: &Expr<'i>,
+        expr: &'p Expr<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
-    ) -> std::io::Result<Vec<AnalyzedStatement<'i>>> {
+    ) -> std::io::Result<Vec<AnalyzedStatement<'i, 'p>>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr {
                 PrimaryExpr::Block(block) => {
@@ -1064,47 +1092,29 @@ impl Analyzer {
         }
     }
 
-    fn analyze_thin_block<'i>(
+    fn analyze_thin_block<'i, 'p>(
         &mut self,
-        block: &Block<'i>,
+        block: &'p Block<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
         actives: &mut Vec<PathBuf>,
-    ) -> std::io::Result<ThinAnalyzedBlock<'i>> {
-        let mut analyzed_block = ThinAnalyzedBlock::new();
+    ) -> std::io::Result<ThinAnalyzedBlock<'i, 'p>> {
+        let mut analyzed_block = ThinAnalyzedBlock::new_top_level();
 
         for statement in &block.statements {
             match statement {
                 Statement::Assignment(assignment) => {
-                    if let LValue::Identifier(identifier) = &assignment.lvalue {
-                        if is_exported(identifier.name) && assignment.op == AssignOp::Assign {
-                            analyzed_block.variables.insert(AnalyzedVariable {
-                                name: identifier.name,
-                                assignments: vec![assignment.clone()],
-                                document,
-                                span: assignment.span,
-                            });
-                        }
-                    }
                     let name = match &assignment.lvalue {
                         LValue::Identifier(identifier) => identifier.name,
                         LValue::ArrayAccess(array_access) => array_access.array.name,
                         LValue::ScopeAccess(scope_access) => scope_access.scope.name,
                     };
-                    if is_exported(name)
-                        && (assignment.op != AssignOp::Assign
-                            || !matches!(&assignment.lvalue, LValue::Identifier(_)))
-                    {
-                        analyzed_block.variables = analyzed_block
-                            .variables
-                            .into_iter()
-                            .map(|mut variable| {
-                                if variable.name == name {
-                                    variable.assignments.push(assignment.clone());
-                                }
-                                variable
-                            })
-                            .collect();
+                    if is_exported(name) {
+                        analyzed_block.scope.insert(AnalyzedAssignment {
+                            name,
+                            assignment,
+                            document,
+                        });
                     }
                 }
                 Statement::Call(call) => match call.function.name {
