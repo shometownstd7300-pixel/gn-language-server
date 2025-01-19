@@ -235,7 +235,7 @@ impl LanguageServer for Backend {
             .collect();
         for template in templates {
             let mut contents = vec![MarkedString::from_language_code(
-                "text".to_string(),
+                "gn".to_string(),
                 format!("template(\"{}\") {{ ... }}", template.name),
             )];
             if let Some(comments) = &template.comments {
@@ -249,7 +249,10 @@ impl LanguageServer for Backend {
                 .line_index
                 .position(template.header.start());
             contents.push(MarkedString::from_markdown(format!(
-                "Go to [Definition]({}#L{},{})",
+                "Defined at [{}:{}:{}]({}#L{},{})",
+                current_file.workspace.format_path(&template.document.path),
+                position.line + 1,
+                position.character + 1,
                 Url::from_file_path(&template.document.path).unwrap(),
                 position.line + 1,
                 position.character + 1,
@@ -267,49 +270,55 @@ impl LanguageServer for Backend {
                 .next()
             {
                 let single_assignment = variable.assignments.len() == 1;
-                let snippet = match first_assignment.statement {
-                    Statement::Assignment(assignment) => {
-                        let raw_value = assignment.rvalue.span().as_str();
-                        let display_value = if single_assignment && raw_value.lines().count() <= 5 {
-                            raw_value
-                        } else {
-                            "..."
-                        };
-                        format!(
-                            "{} {} {}",
-                            assignment.lvalue.span().as_str(),
-                            assignment.op,
-                            display_value
-                        )
+                let snippet = if single_assignment {
+                    match first_assignment.statement {
+                        Statement::Assignment(assignment) => {
+                            let raw_value = assignment.rvalue.span().as_str();
+                            let display_value = if raw_value.lines().count() <= 5 {
+                                raw_value
+                            } else {
+                                "..."
+                            };
+                            format!(
+                                "{} {} {}",
+                                assignment.lvalue.span().as_str(),
+                                assignment.op,
+                                display_value
+                            )
+                        }
+                        Statement::Call(call) => {
+                            assert_eq!(call.function.name, "forward_variables_from");
+                            call.span.as_str().to_string()
+                        }
+                        _ => unreachable!(),
                     }
-                    Statement::Call(call) => {
-                        assert_eq!(call.function.name, "forward_variables_from");
-                        call.span.as_str().to_string()
-                    }
-                    _ => unreachable!(),
+                } else {
+                    format!("{} = ...", ident.name)
                 };
                 let position = first_assignment
                     .document
                     .line_index
                     .position(first_assignment.statement.span().start());
                 docs.push(vec![
-                    MarkedString::from_language_code("text".to_string(), snippet),
-                    MarkedString::from_markdown(format!(
-                        "{} at [{}:{}:{}]({}#L{},{})",
-                        if single_assignment {
-                            "Defined"
-                        } else {
-                            "First assigned"
-                        },
-                        current_file
-                            .workspace
-                            .format_path(&first_assignment.document.path),
-                        position.line + 1,
-                        position.character + 1,
-                        Url::from_file_path(&first_assignment.document.path).unwrap(),
-                        position.line + 1,
-                        position.character + 1,
-                    )),
+                    MarkedString::from_language_code("gn".to_string(), snippet),
+                    if single_assignment {
+                        MarkedString::from_markdown(format!(
+                            "Defined at [{}:{}:{}]({}#L{},{})",
+                            current_file
+                                .workspace
+                                .format_path(&first_assignment.document.path),
+                            position.line + 1,
+                            position.character + 1,
+                            Url::from_file_path(&first_assignment.document.path).unwrap(),
+                            position.line + 1,
+                            position.character + 1,
+                        ))
+                    } else {
+                        MarkedString::from_markdown(format!(
+                            "Defined and modified in {} locations",
+                            variable.assignments.len()
+                        ))
+                    },
                 ]);
             }
         }
