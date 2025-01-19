@@ -209,13 +209,13 @@ impl ThinAnalyzedFile {
 }
 
 pub struct AnalyzedBlock<'i, 'p> {
-    pub statements: Vec<AnalyzedStatement<'i, 'p>>,
+    pub events: Vec<AnalyzedEvent<'i, 'p>>,
     pub span: Span<'i>,
 }
 
 impl<'i, 'p> AnalyzedBlock<'i, 'p> {
-    fn top_level_statements<'a>(&'a self) -> AnalyzedBlockTopLevelStatements<'i, 'p, 'a> {
-        AnalyzedBlockTopLevelStatements::new(self)
+    pub fn top_level_events<'a>(&'a self) -> TopLevelEvents<'i, 'p, 'a> {
+        TopLevelEvents::new(&self.events)
     }
 
     pub fn scope_at(
@@ -226,12 +226,12 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         let mut scope = AnalyzedScope::new(parent);
 
         // First pass: Collect all variables in the scope.
-        for statement in self.top_level_statements() {
-            match statement {
-                AnalyzedStatement::Assignment(assignment) => {
+        for event in self.top_level_events() {
+            match event {
+                AnalyzedEvent::Assignment(assignment) => {
                     scope.insert(assignment.clone());
                 }
-                AnalyzedStatement::Import(import) => {
+                AnalyzedEvent::Import(import) => {
                     scope.merge(&import.file.analyzed_root.scope);
                 }
                 _ => {}
@@ -239,8 +239,8 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         }
 
         // Second pass: Find the subscope that contains the position.
-        for statement in self.top_level_statements() {
-            if let AnalyzedStatement::NewScope(block) = statement {
+        for event in self.top_level_events() {
+            if let AnalyzedEvent::NewScope(block) = event {
                 if block.span.start() < pos && pos < block.span.end() {
                     return block.scope_at(pos, Some(Box::new(scope)));
                 }
@@ -252,9 +252,9 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
 
     pub fn templates_at(&'i self, pos: usize) -> HashSet<&'i AnalyzedTemplate<'i>> {
         let mut templates = HashSet::new();
-        for statement in &self.statements {
-            match statement {
-                AnalyzedStatement::Conditions(blocks) => {
+        for event in &self.events {
+            match event {
+                AnalyzedEvent::Conditions(blocks) => {
                     if blocks.last().unwrap().span.end() <= pos {
                         for block in blocks {
                             templates.extend(block.templates_at(pos));
@@ -267,24 +267,24 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                         }
                     }
                 }
-                AnalyzedStatement::Import(import) => {
+                AnalyzedEvent::Import(import) => {
                     if import.span.end() <= pos {
                         templates.extend(import.file.analyzed_root.templates.iter());
                     }
                 }
-                AnalyzedStatement::Template(template) => {
+                AnalyzedEvent::Template(template) => {
                     if template.span.end() <= pos {
                         templates.insert(template);
                     }
                 }
-                AnalyzedStatement::NewScope(block) => {
+                AnalyzedEvent::NewScope(block) => {
                     if block.span.start() <= pos && pos <= block.span.end() {
                         templates.extend(block.templates_at(pos));
                     }
                 }
-                AnalyzedStatement::Assignment(_)
-                | AnalyzedStatement::DeclareArgs(_)
-                | AnalyzedStatement::Target(_) => {}
+                AnalyzedEvent::Assignment(_)
+                | AnalyzedEvent::DeclareArgs(_)
+                | AnalyzedEvent::Target(_) => {}
             }
         }
         templates
@@ -292,9 +292,9 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
 
     pub fn targets_at(&'i self, pos: usize) -> HashSet<&'i AnalyzedTarget<'i>> {
         let mut targets = HashSet::new();
-        for statement in &self.statements {
-            match statement {
-                AnalyzedStatement::Conditions(blocks) => {
+        for event in &self.events {
+            match event {
+                AnalyzedEvent::Conditions(blocks) => {
                     if blocks.last().unwrap().span.end() <= pos {
                         for block in blocks {
                             targets.extend(block.targets_at(pos));
@@ -307,61 +307,64 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                         }
                     }
                 }
-                AnalyzedStatement::Import(import) => {
+                AnalyzedEvent::Import(import) => {
                     if import.span.end() <= pos {
                         targets.extend(import.file.analyzed_root.targets.iter());
                     }
                 }
-                AnalyzedStatement::Target(target) => {
+                AnalyzedEvent::Target(target) => {
                     if target.span.end() <= pos {
                         targets.insert(target);
                     }
                 }
-                AnalyzedStatement::NewScope(block) => {
+                AnalyzedEvent::NewScope(block) => {
                     if block.span.start() <= pos && pos <= block.span.end() {
                         targets.extend(block.targets_at(pos));
                     }
                 }
-                AnalyzedStatement::Assignment(_)
-                | AnalyzedStatement::DeclareArgs(_)
-                | AnalyzedStatement::Template(_) => {}
+                AnalyzedEvent::Assignment(_)
+                | AnalyzedEvent::DeclareArgs(_)
+                | AnalyzedEvent::Template(_) => {}
             }
         }
         targets
     }
 }
 
-struct AnalyzedBlockTopLevelStatements<'i, 'p, 'a> {
-    stack: Vec<&'a AnalyzedStatement<'i, 'p>>,
+pub struct TopLevelEvents<'i, 'p, 'a> {
+    stack: Vec<&'a AnalyzedEvent<'i, 'p>>,
 }
 
-impl<'i, 'p, 'a> AnalyzedBlockTopLevelStatements<'i, 'p, 'a> {
-    fn new(block: &'a AnalyzedBlock<'i, 'p>) -> Self {
-        AnalyzedBlockTopLevelStatements {
-            stack: block.statements.iter().rev().collect(),
+impl<'i, 'p, 'a> TopLevelEvents<'i, 'p, 'a> {
+    pub fn new<I>(events: impl IntoIterator<Item = &'a AnalyzedEvent<'i, 'p>, IntoIter = I>) -> Self
+    where
+        I: DoubleEndedIterator<Item = &'a AnalyzedEvent<'i, 'p>>,
+    {
+        TopLevelEvents {
+            stack: events.into_iter().rev().collect(),
         }
     }
 }
 
-impl<'i, 'p, 'a> Iterator for AnalyzedBlockTopLevelStatements<'i, 'p, 'a> {
-    type Item = &'a AnalyzedStatement<'i, 'p>;
+impl<'i, 'p, 'a> Iterator for TopLevelEvents<'i, 'p, 'a> {
+    type Item = &'a AnalyzedEvent<'i, 'p>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(statement) = self.stack.pop() {
-            match statement {
-                AnalyzedStatement::Conditions(blocks) => {
+        while let Some(event) = self.stack.pop() {
+            match event {
+                AnalyzedEvent::Conditions(blocks) => {
                     self.stack
-                        .extend(blocks.iter().flat_map(|block| &block.statements).rev());
+                        .extend(blocks.iter().flat_map(|block| &block.events).rev());
                 }
-                AnalyzedStatement::DeclareArgs(block) => {
-                    self.stack.extend(block.statements.iter().rev());
+                AnalyzedEvent::DeclareArgs(block) => {
+                    self.stack.extend(block.events.iter().rev());
                 }
-                AnalyzedStatement::Import(_)
-                | AnalyzedStatement::Assignment(_)
-                | AnalyzedStatement::Template(_)
-                | AnalyzedStatement::Target(_)
-                | AnalyzedStatement::NewScope(_) => {
-                    return Some(statement);
+                AnalyzedEvent::Import(_)
+                | AnalyzedEvent::Assignment(_)
+                | AnalyzedEvent::Template(_)
+                | AnalyzedEvent::Target(_)
+                | AnalyzedEvent::NewScope(_) => {
+                    return Some(event);
                 }
             }
         }
@@ -391,7 +394,7 @@ impl ThinAnalyzedBlock<'_, '_> {
     }
 }
 
-pub enum AnalyzedStatement<'i, 'p> {
+pub enum AnalyzedEvent<'i, 'p> {
     Conditions(Vec<AnalyzedBlock<'i, 'p>>),
     Import(AnalyzedImport<'i>),
     DeclareArgs(AnalyzedBlock<'i, 'p>),
@@ -753,9 +756,9 @@ impl Analyzer {
 
         let mut analyzed_root = self.analyze_fat_block(&ast_root, workspace, &document)?;
         // Insert a synthetic import of BUILDCONFIG.gn.
-        analyzed_root.statements.insert(
+        analyzed_root.events.insert(
             0,
-            AnalyzedStatement::Import(AnalyzedImport {
+            AnalyzedEvent::Import(AnalyzedImport {
                 file: self.analyze_thin_cached(
                     &workspace.build_config,
                     workspace,
@@ -863,29 +866,29 @@ impl Analyzer {
         workspace: &WorkspaceContext,
         document: &'i Document,
     ) -> std::io::Result<AnalyzedBlock<'i, 'p>> {
-        let statements: Vec<AnalyzedStatement> = block
+        let events: Vec<AnalyzedEvent> = block
             .statements
             .iter()
-            .map(|statement| -> std::io::Result<Vec<AnalyzedStatement>> {
+            .map(|statement| -> std::io::Result<Vec<AnalyzedEvent>> {
                 match statement {
                     Statement::Assignment(assignment) => {
-                        let mut statements = Vec::new();
+                        let mut events = Vec::new();
                         let name = match &assignment.lvalue {
                             LValue::Identifier(identifier) => identifier.name,
                             LValue::ArrayAccess(array_access) => array_access.array.name,
                             LValue::ScopeAccess(scope_access) => scope_access.scope.name,
                         };
-                        statements.push(AnalyzedStatement::Assignment(AnalyzedAssignment {
+                        events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
                             name,
                             assignment,
                             document,
                         }));
-                        statements.extend(self.analyze_fat_expr(
+                        events.extend(self.analyze_fat_expr(
                             &assignment.rvalue,
                             workspace,
                             document,
                         )?);
-                        Ok(statements)
+                        Ok(events)
                     }
                     Statement::Call(call) => {
                         match call.function.name {
@@ -911,7 +914,7 @@ impl Analyzer {
                                         }
                                         other => other?,
                                     };
-                                    Ok(vec![AnalyzedStatement::Import(AnalyzedImport {
+                                    Ok(vec![AnalyzedEvent::Import(AnalyzedImport {
                                         file,
                                         span: call.span(),
                                     })])
@@ -920,7 +923,7 @@ impl Analyzer {
                                 }
                             }
                             "template" => {
-                                let mut statements = Vec::new();
+                                let mut events = Vec::new();
                                 if let Some(name) = call
                                     .args
                                     .iter()
@@ -929,40 +932,36 @@ impl Analyzer {
                                     .and_then(|expr| expr.as_primary_string())
                                     .and_then(|s| parse_simple_literal(s.raw_value))
                                 {
-                                    statements.push(AnalyzedStatement::Template(
-                                        AnalyzedTemplate {
-                                            name,
-                                            comments: call
-                                                .comments
-                                                .as_ref()
-                                                .map(|comments| comments.text.clone()),
-                                            document,
-                                            header: call.function.span,
-                                            span: call.span,
-                                        },
-                                    ));
+                                    events.push(AnalyzedEvent::Template(AnalyzedTemplate {
+                                        name,
+                                        comments: call
+                                            .comments
+                                            .as_ref()
+                                            .map(|comments| comments.text.clone()),
+                                        document,
+                                        header: call.function.span,
+                                        span: call.span,
+                                    }));
                                 }
                                 if let Some(block) = &call.block {
-                                    statements.push(AnalyzedStatement::NewScope(
+                                    events.push(AnalyzedEvent::NewScope(
                                         self.analyze_fat_block(block, workspace, document)?,
                                     ));
                                 }
-                                Ok(statements)
+                                Ok(events)
                             }
                             "declare_args" => {
                                 if let Some(block) = &call.block {
                                     let analyzed_root =
                                         self.analyze_fat_block(block, workspace, document)?;
-                                    Ok(vec![AnalyzedStatement::DeclareArgs(analyzed_root)])
+                                    Ok(vec![AnalyzedEvent::DeclareArgs(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
                                 }
                             }
                             "foreach" => {
                                 if let Some(block) = &call.block {
-                                    Ok(self
-                                        .analyze_fat_block(block, workspace, document)?
-                                        .statements)
+                                    Ok(self.analyze_fat_block(block, workspace, document)?.events)
                                 } else {
                                     Ok(Vec::new())
                                 }
@@ -971,13 +970,13 @@ impl Analyzer {
                                 if let Some(block) = &call.block {
                                     let analyzed_root =
                                         self.analyze_fat_block(block, workspace, document)?;
-                                    Ok(vec![AnalyzedStatement::NewScope(analyzed_root)])
+                                    Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
                                 }
                             }
                             _ => {
-                                let mut statements = Vec::new();
+                                let mut events = Vec::new();
                                 if let Some(name) = call
                                     .args
                                     .iter()
@@ -986,7 +985,7 @@ impl Analyzer {
                                     .and_then(|expr| expr.as_primary_string())
                                     .and_then(|s| parse_simple_literal(s.raw_value))
                                 {
-                                    statements.push(AnalyzedStatement::Target(AnalyzedTarget {
+                                    events.push(AnalyzedEvent::Target(AnalyzedTarget {
                                         name,
                                         document,
                                         header: call.args[0].span(),
@@ -994,20 +993,20 @@ impl Analyzer {
                                     }));
                                 }
                                 if let Some(block) = &call.block {
-                                    statements.push(AnalyzedStatement::NewScope(
+                                    events.push(AnalyzedEvent::NewScope(
                                         self.analyze_fat_block(block, workspace, document)?,
                                     ));
                                 }
-                                Ok(statements)
+                                Ok(events)
                             }
                         }
                     }
                     Statement::Condition(condition) => {
-                        let mut statements = Vec::new();
+                        let mut events = Vec::new();
                         let mut condition_blocks = Vec::new();
                         let mut current_condition = condition;
                         loop {
-                            statements.extend(self.analyze_fat_expr(
+                            events.extend(self.analyze_fat_expr(
                                 &current_condition.condition,
                                 workspace,
                                 document,
@@ -1029,8 +1028,8 @@ impl Analyzer {
                                 }
                             }
                         }
-                        statements.push(AnalyzedStatement::Conditions(condition_blocks));
-                        Ok(statements)
+                        events.push(AnalyzedEvent::Conditions(condition_blocks));
+                        Ok(events)
                     }
                     Statement::Unknown(_) | Statement::UnmatchedBrace(_) => Ok(Vec::new()),
                 }
@@ -1041,7 +1040,7 @@ impl Analyzer {
             .collect();
 
         Ok(AnalyzedBlock {
-            statements,
+            events,
             span: block.span,
         })
     }
@@ -1051,15 +1050,15 @@ impl Analyzer {
         expr: &'p Expr<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
-    ) -> std::io::Result<Vec<AnalyzedStatement<'i, 'p>>> {
+    ) -> std::io::Result<Vec<AnalyzedEvent<'i, 'p>>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr {
                 PrimaryExpr::Block(block) => {
                     let analyzed_root = self.analyze_fat_block(block, workspace, document)?;
-                    Ok(vec![AnalyzedStatement::NewScope(analyzed_root)])
+                    Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                 }
                 PrimaryExpr::Call(call) => {
-                    let mut statements: Vec<_> = call
+                    let mut events: Vec<AnalyzedEvent> = call
                         .args
                         .iter()
                         .map(|expr| self.analyze_fat_expr(expr, workspace, document))
@@ -1069,9 +1068,9 @@ impl Analyzer {
                         .collect();
                     if let Some(block) = &call.block {
                         let analyzed_root = self.analyze_fat_block(block, workspace, document)?;
-                        statements.push(AnalyzedStatement::NewScope(analyzed_root));
+                        events.push(AnalyzedEvent::NewScope(analyzed_root));
                     }
-                    Ok(statements)
+                    Ok(events)
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
                     self.analyze_fat_expr(&paren_expr.expr, workspace, document)
@@ -1092,10 +1091,9 @@ impl Analyzer {
             },
             Expr::Unary(unary_expr) => self.analyze_fat_expr(&unary_expr.expr, workspace, document),
             Expr::Binary(binary_expr) => {
-                let mut statements =
-                    self.analyze_fat_expr(&binary_expr.lhs, workspace, document)?;
-                statements.extend(self.analyze_fat_expr(&binary_expr.rhs, workspace, document)?);
-                Ok(statements)
+                let mut events = self.analyze_fat_expr(&binary_expr.lhs, workspace, document)?;
+                events.extend(self.analyze_fat_expr(&binary_expr.rhs, workspace, document)?);
+                Ok(events)
             }
         }
     }
