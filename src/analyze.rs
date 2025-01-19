@@ -65,6 +65,14 @@ impl WorkspaceContext {
     pub fn resolve_path(&self, name: &str, current_dir: &Path) -> PathBuf {
         resolve_path(name, &self.root, current_dir)
     }
+
+    pub fn format_path(&self, path: &Path) -> String {
+        if let Ok(relative_path) = path.strip_prefix(&self.root) {
+            format!("//{}", relative_path.to_string_lossy())
+        } else {
+            path.to_string_lossy().to_string()
+        }
+    }
 }
 
 fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
@@ -231,7 +239,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         }
 
         // Second pass: Find the subscope that contains the position.
-        for statement in &self.statements {
+        for statement in self.top_level_statements() {
             if let AnalyzedStatement::NewScope(block) = statement {
                 if block.span.start() < pos && pos < block.span.end() {
                     return block.scope_at(pos, Some(Box::new(scope)));
@@ -484,7 +492,7 @@ pub enum Link<'i> {
 }
 
 #[allow(clippy::manual_map)]
-fn resolve_label<'s>(
+fn resolve_taret<'s>(
     label: &'s str,
     current_path: &Path,
     workspace: &WorkspaceContext,
@@ -528,7 +536,7 @@ fn collect_links<'i>(
                         span: string.span,
                     });
                 }
-            } else if let Some((build_gn_path, name)) = resolve_label(content, path, workspace) {
+            } else if let Some((build_gn_path, name)) = resolve_taret(content, path, workspace) {
                 return Some(Link::Target {
                     path: build_gn_path,
                     name,

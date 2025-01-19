@@ -20,7 +20,7 @@ use tower_lsp::{lsp_types::*, Client, LanguageServer, LspService, Server};
 
 use crate::{
     analyze::{AnalyzedFile, Analyzer, Link},
-    ast::{Identifier, Node},
+    ast::{AssignOp, Identifier, Node},
     builtins::BUILTINS,
     storage::DocumentStorage,
 };
@@ -260,35 +260,45 @@ impl LanguageServer for Backend {
         // Check variables.
         let scope = current_file.scope_at(ident.span.start());
         if let Some(variable) = scope.get(ident.name) {
-            let sorted_assignments = variable
+            if let Some(first_assignment) = variable
                 .assignments
                 .iter()
-                .sorted_by_key(|a| (&a.document.path, a.assignment.span.start()));
-            for assignment in sorted_assignments {
-                let raw_value = assignment.assignment.rvalue.span().as_str();
-                let display_value = if raw_value.contains('\n') {
-                    "..."
-                } else {
+                .filter(|a| a.assignment.op == AssignOp::Assign)
+                .sorted_by_key(|a| (&a.document.path, a.assignment.span.start()))
+                .next()
+            {
+                let single_assignment = variable.assignments.len() == 1;
+                let raw_value = first_assignment.assignment.rvalue.span().as_str();
+                let display_value = if single_assignment && raw_value.lines().count() <= 5 {
                     raw_value
+                } else {
+                    "..."
                 };
-                let position = assignment
+                let position = first_assignment
                     .document
                     .line_index
-                    .position(assignment.assignment.span.start());
+                    .position(first_assignment.assignment.span.start());
                 docs.push(vec![
                     MarkedString::from_language_code(
                         "text".to_string(),
                         format!(
                             "{} {} {}",
-                            variable.name, assignment.assignment.op, display_value
+                            variable.name, first_assignment.assignment.op, display_value
                         ),
                     ),
                     MarkedString::from_markdown(format!(
-                        "[{}:{}:{}]({}#L{},{})",
-                        assignment.document.path.display(),
+                        "{} at [{}:{}:{}]({}#L{},{})",
+                        if single_assignment {
+                            "Defined"
+                        } else {
+                            "First assigned"
+                        },
+                        current_file
+                            .workspace
+                            .format_path(&first_assignment.document.path),
                         position.line + 1,
                         position.character + 1,
-                        Url::from_file_path(&assignment.document.path).unwrap(),
+                        Url::from_file_path(&first_assignment.document.path).unwrap(),
                         position.line + 1,
                         position.character + 1,
                     )),
