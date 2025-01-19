@@ -26,7 +26,7 @@ use pest::Span;
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::{
-    ast::{parse, AssignOp, Assignment, Block, Expr, LValue, Node, PrimaryExpr, Statement},
+    ast::{parse, AssignOp, Block, Expr, LValue, Node, PrimaryExpr, Statement},
     storage::{Document, DocumentStorage},
     util::{parse_simple_literal, LineIndex},
 };
@@ -432,7 +432,6 @@ impl<'i, 'p> AnalyzedScope<'i, 'p> {
         self.variables
             .entry(assignment.name)
             .or_insert_with(|| AnalyzedVariable {
-                name: assignment.name,
                 assignments: HashSet::new(),
             })
             .assignments
@@ -444,7 +443,6 @@ impl<'i, 'p> AnalyzedScope<'i, 'p> {
             self.variables
                 .entry(name)
                 .or_insert_with(|| AnalyzedVariable {
-                    name,
                     assignments: HashSet::new(),
                 })
                 .assignments
@@ -455,7 +453,6 @@ impl<'i, 'p> AnalyzedScope<'i, 'p> {
 
 #[derive(Clone)]
 pub struct AnalyzedVariable<'i, 'p> {
-    pub name: &'i str,
     pub assignments: HashSet<AnalyzedAssignment<'i, 'p>>,
 }
 
