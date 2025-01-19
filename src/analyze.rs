@@ -461,6 +461,7 @@ pub struct AnalyzedAssignment<'i, 'p> {
     pub name: &'i str,
     pub statement: &'p Statement<'i>,
     pub document: &'i Document,
+    pub variable_span: Span<'i>,
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -870,15 +871,16 @@ impl Analyzer {
                 match statement {
                     Statement::Assignment(assignment) => {
                         let mut events = Vec::new();
-                        let name = match &assignment.lvalue {
-                            LValue::Identifier(identifier) => identifier.name,
-                            LValue::ArrayAccess(array_access) => array_access.array.name,
-                            LValue::ScopeAccess(scope_access) => scope_access.scope.name,
+                        let identifier = match &assignment.lvalue {
+                            LValue::Identifier(identifier) => identifier,
+                            LValue::ArrayAccess(array_access) => &array_access.array,
+                            LValue::ScopeAccess(scope_access) => &scope_access.scope,
                         };
                         events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
-                            name,
+                            name: identifier.name,
                             statement,
                             document,
+                            variable_span: identifier.span,
                         }));
                         events.extend(self.analyze_fat_expr(
                             &assignment.rvalue,
@@ -973,28 +975,27 @@ impl Analyzer {
                                 }
                             }
                             "forward_variables_from" => {
-                                if let Some(names) = call
+                                if let Some(strings) = call
                                     .args
                                     .get(1)
                                     .and_then(|expr| expr.as_primary_list())
                                     .map(|list| {
                                         list.values
                                             .iter()
-                                            .filter_map(|expr| {
-                                                expr.as_primary_string().and_then(|string| {
-                                                    parse_simple_literal(string.raw_value)
-                                                })
-                                            })
+                                            .filter_map(|expr| expr.as_primary_string())
                                             .collect::<Vec<_>>()
                                     })
                                 {
-                                    return Ok(names
+                                    return Ok(strings
                                         .into_iter()
-                                        .map(|name| {
-                                            AnalyzedEvent::Assignment(AnalyzedAssignment {
-                                                name,
-                                                statement,
-                                                document,
+                                        .filter_map(|string| {
+                                            parse_simple_literal(string.raw_value).map(|name| {
+                                                AnalyzedEvent::Assignment(AnalyzedAssignment {
+                                                    name,
+                                                    statement,
+                                                    document,
+                                                    variable_span: string.span,
+                                                })
                                             })
                                         })
                                         .collect());
@@ -1136,16 +1137,17 @@ impl Analyzer {
         for statement in &block.statements {
             match statement {
                 Statement::Assignment(assignment) => {
-                    let name = match &assignment.lvalue {
-                        LValue::Identifier(identifier) => identifier.name,
-                        LValue::ArrayAccess(array_access) => array_access.array.name,
-                        LValue::ScopeAccess(scope_access) => scope_access.scope.name,
+                    let identifier = match &assignment.lvalue {
+                        LValue::Identifier(identifier) => identifier,
+                        LValue::ArrayAccess(array_access) => &array_access.array,
+                        LValue::ScopeAccess(scope_access) => &scope_access.scope,
                     };
-                    if is_exported(name) {
+                    if is_exported(identifier.name) {
                         analyzed_block.scope.insert(AnalyzedAssignment {
-                            name,
+                            name: identifier.name,
                             statement,
                             document,
+                            variable_span: identifier.span,
                         });
                     }
                 }
@@ -1197,28 +1199,27 @@ impl Analyzer {
                     }
                     "set_defaults" => {}
                     "forward_variables_from" => {
-                        if let Some(names) = call
+                        if let Some(strings) = call
                             .args
                             .get(1)
                             .and_then(|expr| expr.as_primary_list())
                             .map(|list| {
                                 list.values
                                     .iter()
-                                    .filter_map(|expr| {
-                                        expr.as_primary_string().and_then(|string| {
-                                            parse_simple_literal(string.raw_value)
-                                        })
-                                    })
+                                    .filter_map(|expr| expr.as_primary_string())
                                     .collect::<Vec<_>>()
                             })
                         {
-                            for name in names {
-                                if is_exported(name) {
-                                    analyzed_block.scope.insert(AnalyzedAssignment {
-                                        name,
-                                        statement,
-                                        document,
-                                    });
+                            for string in strings {
+                                if let Some(name) = parse_simple_literal(string.raw_value) {
+                                    if is_exported(name) {
+                                        analyzed_block.scope.insert(AnalyzedAssignment {
+                                            name,
+                                            statement,
+                                            document,
+                                            variable_span: string.span,
+                                        });
+                                    }
                                 }
                             }
                         }

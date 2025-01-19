@@ -193,7 +193,7 @@ impl LanguageServer for Backend {
                     target_selection_range: assignment
                         .document
                         .line_index
-                        .range(assignment.statement.span()),
+                        .range(assignment.variable_span),
                 }
             }))
         }
