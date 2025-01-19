@@ -308,6 +308,13 @@ impl<'i> Expr<'i> {
             _ => None,
         }
     }
+
+    pub fn as_primary_list(&self) -> Option<&ListLiteral<'i>> {
+        match self {
+            Expr::Primary(PrimaryExpr::List(list)) => Some(list),
+            _ => None,
+        }
+    }
 }
 
 impl<'i> Node<'i> for Expr<'i> {

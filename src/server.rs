@@ -20,7 +20,7 @@ use tower_lsp::{lsp_types::*, Client, LanguageServer, LspService, Server};
 
 use crate::{
     analyze::{AnalyzedFile, Analyzer, Link},
-    ast::{AssignOp, Identifier, Node},
+    ast::{Identifier, Node, Statement},
     builtins::BUILTINS,
     storage::DocumentStorage,
 };
@@ -189,11 +189,11 @@ impl LanguageServer for Backend {
                     target_range: assignment
                         .document
                         .line_index
-                        .range(assignment.assignment.span),
+                        .range(assignment.statement.span()),
                     target_selection_range: assignment
                         .document
                         .line_index
-                        .range(assignment.assignment.lvalue.span()),
+                        .range(assignment.statement.span()),
                 }
             }))
         }
@@ -263,29 +263,37 @@ impl LanguageServer for Backend {
             if let Some(first_assignment) = variable
                 .assignments
                 .iter()
-                .filter(|a| a.assignment.op == AssignOp::Assign)
-                .sorted_by_key(|a| (&a.document.path, a.assignment.span.start()))
+                .sorted_by_key(|a| (&a.document.path, a.statement.span().start()))
                 .next()
             {
                 let single_assignment = variable.assignments.len() == 1;
-                let raw_value = first_assignment.assignment.rvalue.span().as_str();
-                let display_value = if single_assignment && raw_value.lines().count() <= 5 {
-                    raw_value
-                } else {
-                    "..."
+                let snippet = match first_assignment.statement {
+                    Statement::Assignment(assignment) => {
+                        let raw_value = assignment.rvalue.span().as_str();
+                        let display_value = if single_assignment && raw_value.lines().count() <= 5 {
+                            raw_value
+                        } else {
+                            "..."
+                        };
+                        format!(
+                            "{} {} {}",
+                            assignment.lvalue.span().as_str(),
+                            assignment.op,
+                            display_value
+                        )
+                    }
+                    Statement::Call(call) => {
+                        assert_eq!(call.function.name, "forward_variables_from");
+                        call.span.as_str().to_string()
+                    }
+                    _ => unreachable!(),
                 };
                 let position = first_assignment
                     .document
                     .line_index
-                    .position(first_assignment.assignment.span.start());
+                    .position(first_assignment.statement.span().start());
                 docs.push(vec![
-                    MarkedString::from_language_code(
-                        "text".to_string(),
-                        format!(
-                            "{} {} {}",
-                            variable.name, first_assignment.assignment.op, display_value
-                        ),
-                    ),
+                    MarkedString::from_language_code("text".to_string(), snippet),
                     MarkedString::from_markdown(format!(
                         "{} at [{}:{}:{}]({}#L{},{})",
                         if single_assignment {

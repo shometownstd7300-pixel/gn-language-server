@@ -462,7 +462,7 @@ pub struct AnalyzedVariable<'i, 'p> {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct AnalyzedAssignment<'i, 'p> {
     pub name: &'i str,
-    pub assignment: &'p Assignment<'i>,
+    pub statement: &'p Statement<'i>,
     pub document: &'i Document,
 }
 
@@ -880,7 +880,7 @@ impl Analyzer {
                         };
                         events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
                             name,
-                            assignment,
+                            statement,
                             document,
                         }));
                         events.extend(self.analyze_fat_expr(
@@ -974,6 +974,35 @@ impl Analyzer {
                                 } else {
                                     Ok(Vec::new())
                                 }
+                            }
+                            "forward_variables_from" => {
+                                if let Some(names) = call
+                                    .args
+                                    .get(1)
+                                    .and_then(|expr| expr.as_primary_list())
+                                    .map(|list| {
+                                        list.values
+                                            .iter()
+                                            .filter_map(|expr| {
+                                                expr.as_primary_string().and_then(|string| {
+                                                    parse_simple_literal(string.raw_value)
+                                                })
+                                            })
+                                            .collect::<Vec<_>>()
+                                    })
+                                {
+                                    return Ok(names
+                                        .into_iter()
+                                        .map(|name| {
+                                            AnalyzedEvent::Assignment(AnalyzedAssignment {
+                                                name,
+                                                statement,
+                                                document,
+                                            })
+                                        })
+                                        .collect());
+                                }
+                                Ok(Vec::new())
                             }
                             _ => {
                                 let mut events = Vec::new();
@@ -1118,7 +1147,7 @@ impl Analyzer {
                     if is_exported(name) {
                         analyzed_block.scope.insert(AnalyzedAssignment {
                             name,
-                            assignment,
+                            statement,
                             document,
                         });
                     }
@@ -1170,6 +1199,33 @@ impl Analyzer {
                         }
                     }
                     "set_defaults" => {}
+                    "forward_variables_from" => {
+                        if let Some(names) = call
+                            .args
+                            .get(1)
+                            .and_then(|expr| expr.as_primary_list())
+                            .map(|list| {
+                                list.values
+                                    .iter()
+                                    .filter_map(|expr| {
+                                        expr.as_primary_string().and_then(|string| {
+                                            parse_simple_literal(string.raw_value)
+                                        })
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                        {
+                            for name in names {
+                                if is_exported(name) {
+                                    analyzed_block.scope.insert(AnalyzedAssignment {
+                                        name,
+                                        statement,
+                                        document,
+                                    });
+                                }
+                            }
+                        }
+                    }
                     _ => {
                         if let Some(name) = call
                             .args
