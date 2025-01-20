@@ -34,7 +34,7 @@ the build configuration language used for Chromium.
 
 ![Sticky scroll with useful lines](./docs/screenshots/sticky_scroll.png)
 
-### Outline (targets, templates)
+### Outline
 
 ![Outline](./docs/screenshots/outline.png)
 
