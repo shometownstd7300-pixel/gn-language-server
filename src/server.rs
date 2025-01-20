@@ -15,11 +15,12 @@
 use tokio::sync::Mutex;
 use tower_lsp::{
     lsp_types::{
-        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-        DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams,
-        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-        HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-        MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions,
+        DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+        GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
+        InitializeResult, InitializedParams, MessageType, OneOf, ServerCapabilities,
+        TextDocumentSyncCapability, TextDocumentSyncKind,
     },
     Client, LanguageServer, LspService, Server,
 };
@@ -60,6 +61,7 @@ impl LanguageServer for Backend {
                     work_done_progress_options: Default::default(),
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions::default()),
                 ..Default::default()
             },
             ..Default::default()
@@ -116,6 +118,10 @@ impl LanguageServer for Backend {
         params: DocumentSymbolParams,
     ) -> RpcResult<Option<DocumentSymbolResponse>> {
         crate::providers::document_symbol::document_symbol(&self.context, params).await
+    }
+
+    async fn completion(&self, params: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
+        crate::providers::completion::completion(&self.context, params).await
     }
 }
 

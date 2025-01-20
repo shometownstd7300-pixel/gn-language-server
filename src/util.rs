@@ -69,7 +69,11 @@ impl<'i> LineIndex<'i> {
             let mut buf = [0; 2];
             character += ch.encode_utf16(&mut buf).len();
         }
-        None
+        if character >= position.character as usize {
+            Some(self.str_offset(line) + line.len())
+        } else {
+            None
+        }
     }
 }
 

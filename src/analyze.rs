@@ -449,6 +449,18 @@ impl<'i, 'p> AnalyzedScope<'i, 'p> {
                 .extend(other_variable.assignments.clone());
         }
     }
+
+    pub fn all_variables(&self) -> HashMap<&'i str, &AnalyzedVariable<'i, 'p>> {
+        let mut variables = if let Some(parent) = &self.parent {
+            parent.all_variables()
+        } else {
+            HashMap::new()
+        };
+        for (name, variable) in &self.variables {
+            variables.insert(name, variable);
+        }
+        variables
+    }
 }
 
 #[derive(Clone)]

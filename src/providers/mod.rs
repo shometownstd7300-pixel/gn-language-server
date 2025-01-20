@@ -22,6 +22,7 @@ use crate::{
     ast::{Identifier, Node},
 };
 
+pub mod completion;
 pub mod document;
 pub mod document_link;
 pub mod document_symbol;
