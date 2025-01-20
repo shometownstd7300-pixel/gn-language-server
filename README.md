@@ -32,8 +32,6 @@
 
 ## TODO
 
-- Autocompletion
-- Hierarchy
 - Formatting
 
 ## Disclaimer
