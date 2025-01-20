@@ -512,6 +512,7 @@ impl<'i> Node<'i> for IntegerLiteral<'i> {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StringLiteral<'i> {
     pub raw_value: &'i str,
+    pub embedded_exprs: Vec<Expr<'i>>,
     pub span: Span<'i>,
 }
 
@@ -521,7 +522,10 @@ impl<'i> Node<'i> for StringLiteral<'i> {
     }
 
     fn children(&self) -> Vec<&dyn Node<'i>> {
-        Vec::new()
+        self.embedded_exprs
+            .iter()
+            .map(|expr| expr.as_node())
+            .collect()
     }
 
     fn span(&self) -> Span<'i> {

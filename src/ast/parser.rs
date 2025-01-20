@@ -63,7 +63,28 @@ fn convert_string(pair: Pair<Rule>) -> StringLiteral {
     let pair = pair.into_inner().exactly_one().unwrap();
     assert!(matches!(pair.as_rule(), Rule::string_content));
     let raw_value = pair.as_str();
-    StringLiteral { raw_value, span }
+    let embedded_exprs = pair
+        .into_inner()
+        .map(|pair| match pair.as_rule() {
+            Rule::embedded_expr => convert_expr(pair.into_inner().exactly_one().unwrap()),
+            Rule::embedded_identifier => {
+                Expr::Primary(PrimaryExpr::Identifier(convert_identifier(
+                    pair.into_inner()
+                        .exactly_one()
+                        .unwrap()
+                        .into_inner()
+                        .exactly_one()
+                        .unwrap(),
+                )))
+            }
+            _ => unreachable!(),
+        })
+        .collect();
+    StringLiteral {
+        raw_value,
+        embedded_exprs,
+        span,
+    }
 }
 
 fn convert_list(pair: Pair<Rule>) -> ListLiteral {

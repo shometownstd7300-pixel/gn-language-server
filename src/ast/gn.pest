@@ -52,7 +52,11 @@ identifier = @{ ('A'..'Z' | 'a'..'z' | "_") ~ ('A'..'Z' | 'a'..'z' | '0'..'9' | 
 integer = @{ "-"? ~ ('0'..'9')+ }
 string = ${ "\"" ~ string_content ~ "\"" }
 string_content = @{ char* }
-char = { !("\"" | "\\") ~ ANY | "\\" ~ ANY }
+char = { escaped_hex_char | embedded_expr | embedded_identifier | !("\"" | "\\") ~ ANY | "\\" ~ ANY }
+escaped_hex_char = { "$0x" ~ ('0'..'9' | 'A'..'F' | 'a'..'f'){2} }
+embedded_expr = !{ "${" ~ expr ~ "}" }
+embedded_identifier = !{ embedded_identifier_inner }
+embedded_identifier_inner = ${ "$" ~ identifier }
 
 comment = ${ "#" ~ " "? ~ comment_content ~ NEWLINE? }
 comment_content = @{ (!NEWLINE ~ ANY)* }
