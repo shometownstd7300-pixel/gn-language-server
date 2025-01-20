@@ -1,10 +1,26 @@
 # GN Language Server
 
+A [language server](https://microsoft.github.io/language-server-protocol/) for
+[GN](https://gn.googlesource.com/gn/),
+the build configuration language used for Chromium.
+
 ## Features
 
-### Outline (targets, templates)
+### Syntax highlighting
 
-![Outline](./docs/screenshots/outline.png)
+![Syntax highlighting](./docs/screenshots/syntax_highlighting.png)
+
+### Completion
+
+![Completion](./docs/screenshots/completion.png)
+
+### Hover documentation
+
+![Hover documentation](./docs/screenshots/hover_documentation.png)
+
+### Go to definition
+
+![Go to definition](./docs/screenshots/go_to_definition.png)
 
 ### Following imports
 
@@ -14,17 +30,13 @@
 
 ![Following dependencies](./docs/screenshots/following_dependencies.png)
 
-### Syntax highlighting
+### Sticky scroll with useful lines
 
-![Syntax highlighting](./docs/screenshots/syntax_highlighting.png)
+![Sticky scroll with useful lines](./docs/screenshots/sticky_scroll.png)
 
-### Hover documentation (templates and builtins)
+### Outline (targets, templates)
 
-![Hover documentation](./docs/screenshots/hover_documentation.png)
-
-### Go to definition (templates)
-
-![Go to definition](./docs/screenshots/go_to_definition.png)
+![Outline](./docs/screenshots/outline.png)
 
 ### Code folding
 
