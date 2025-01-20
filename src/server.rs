@@ -12,50 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{borrow::Cow, path::PathBuf};
-
-use itertools::Itertools;
 use tokio::sync::Mutex;
-use tower_lsp::{lsp_types::*, Client, LanguageServer, LspService, Server};
+use tower_lsp::{
+    lsp_types::{
+        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams,
+        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+        HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+        MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    },
+    Client, LanguageServer, LspService, Server,
+};
 
 use crate::{
-    analyze::{AnalyzedFile, Analyzer, Link},
-    ast::{Identifier, Node, Statement},
-    builtins::BUILTINS,
+    analyze::Analyzer,
+    providers::{ProviderContext, RpcResult},
     storage::DocumentStorage,
 };
 
-type RpcResult<T> = tower_lsp::jsonrpc::Result<T>;
-
-fn into_rpc_error(err: std::io::Error) -> tower_lsp::jsonrpc::Error {
-    let mut rpc_err = tower_lsp::jsonrpc::Error::internal_error();
-    rpc_err.message = Cow::from(err.to_string());
-    rpc_err
-}
-
-fn lookup_identifier_at(file: &AnalyzedFile, position: Position) -> Option<&Identifier> {
-    let offset = file.document.line_index.offset(position)?;
-    file.ast_root
-        .identifiers()
-        .find(|ident| ident.span.start() <= offset && offset <= ident.span.end())
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct TargetLinkData {
-    path: PathBuf,
-    name: String,
-}
-
 struct Backend {
-    analyzer: Mutex<Analyzer>,
-    client: Client,
+    context: ProviderContext,
 }
 
 impl Backend {
     pub fn new(analyzer: Analyzer, client: Client) -> Self {
         Self {
-            analyzer: Mutex::new(analyzer),
-            client,
+            context: ProviderContext {
+                analyzer: Mutex::new(analyzer),
+                client,
+            },
         }
     }
 }
@@ -82,7 +67,8 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _params: InitializedParams) {
-        self.client
+        self.context
+            .client
             .log_message(MessageType::INFO, "GN language server initialized")
             .await;
     }
@@ -92,349 +78,44 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let Ok(path) = params.text_document.uri.to_file_path() else {
-            return;
-        };
-
-        self.analyzer.lock().await.storage_mut().load_to_memory(
-            &path,
-            &params.text_document.text,
-            params.text_document.version,
-        );
-
-        // let file = self.parser.lock().await.analyze(&path).unwrap().clone();
-        // self.client.log_message(MessageType::INFO, format!("{:?}", file.root)).await;
+        crate::providers::document::did_open(&self.context, params).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let Ok(path) = params.text_document.uri.to_file_path() else {
-            return;
-        };
-        let Some(change) = params.content_changes.first() else {
-            return;
-        };
-
-        self.analyzer.lock().await.storage_mut().load_to_memory(
-            &path,
-            &change.text,
-            params.text_document.version,
-        );
+        crate::providers::document::did_change(&self.context, params).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let Ok(path) = params.text_document.uri.to_file_path() else {
-            return;
-        };
-
-        self.analyzer
-            .lock()
-            .await
-            .storage_mut()
-            .unload_from_memory(&path);
+        crate::providers::document::did_close(&self.context, params).await;
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> RpcResult<Option<GotoDefinitionResponse>> {
-        let Ok(path) = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .to_file_path()
-        else {
-            return Ok(None);
-        };
-
-        let current_file = self
-            .analyzer
-            .lock()
-            .await
-            .analyze(&path)
-            .map_err(into_rpc_error)?;
-
-        let Some(ident) =
-            lookup_identifier_at(&current_file, params.text_document_position_params.position)
-        else {
-            return Ok(None);
-        };
-
-        let mut links: Vec<LocationLink> = Vec::new();
-
-        // Check templates.
-        links.extend(
-            current_file
-                .templates_at(ident.span.start())
-                .into_iter()
-                .filter(|template| template.name == ident.name)
-                .map(|template| LocationLink {
-                    origin_selection_range: Some(
-                        current_file.document.line_index.range(ident.span),
-                    ),
-                    target_uri: Url::from_file_path(&template.document.path).unwrap(),
-                    target_range: template.document.line_index.range(template.span),
-                    target_selection_range: template.document.line_index.range(template.header),
-                }),
-        );
-
-        // Check variables.
-        let scope = current_file.scope_at(ident.span.start());
-        if let Some(variable) = scope.get(ident.name) {
-            links.extend(variable.assignments.iter().map(|assignment| {
-                LocationLink {
-                    origin_selection_range: Some(
-                        current_file.document.line_index.range(ident.span),
-                    ),
-                    target_uri: Url::from_file_path(&assignment.document.path).unwrap(),
-                    target_range: assignment
-                        .document
-                        .line_index
-                        .range(assignment.statement.span()),
-                    target_selection_range: assignment
-                        .document
-                        .line_index
-                        .range(assignment.variable_span),
-                }
-            }))
-        }
-
-        Ok(Some(GotoDefinitionResponse::Link(links)))
+        crate::providers::goto_definition::goto_definition(&self.context, params).await
     }
 
     async fn hover(&self, params: HoverParams) -> RpcResult<Option<Hover>> {
-        let Ok(path) = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .to_file_path()
-        else {
-            return Ok(None);
-        };
-
-        let current_file = self
-            .analyzer
-            .lock()
-            .await
-            .analyze(&path)
-            .map_err(into_rpc_error)?;
-
-        let Some(ident) =
-            lookup_identifier_at(&current_file, params.text_document_position_params.position)
-        else {
-            return Ok(None);
-        };
-
-        let mut docs: Vec<Vec<MarkedString>> = Vec::new();
-
-        // Check templates.
-        let templates: Vec<_> = current_file
-            .templates_at(ident.span.start())
-            .into_iter()
-            .filter(|template| template.name == ident.name)
-            .sorted_by_key(|template| (&template.document.path, template.span.start()))
-            .collect();
-        for template in templates {
-            let mut contents = vec![MarkedString::from_language_code(
-                "gn".to_string(),
-                format!("template(\"{}\") {{ ... }}", template.name),
-            )];
-            if let Some(comments) = &template.comments {
-                contents.push(MarkedString::from_language_code(
-                    "text".to_string(),
-                    comments.clone(),
-                ));
-            };
-            let position = template
-                .document
-                .line_index
-                .position(template.header.start());
-            contents.push(MarkedString::from_markdown(format!(
-                "Defined at [{}:{}:{}]({}#L{},{})",
-                current_file.workspace.format_path(&template.document.path),
-                position.line + 1,
-                position.character + 1,
-                Url::from_file_path(&template.document.path).unwrap(),
-                position.line + 1,
-                position.character + 1,
-            )));
-            docs.push(contents);
-        }
-
-        // Check variables.
-        let scope = current_file.scope_at(ident.span.start());
-        if let Some(variable) = scope.get(ident.name) {
-            if let Some(first_assignment) = variable
-                .assignments
-                .iter()
-                .sorted_by_key(|a| (&a.document.path, a.statement.span().start()))
-                .next()
-            {
-                let single_assignment = variable.assignments.len() == 1;
-                let snippet = if single_assignment {
-                    match first_assignment.statement {
-                        Statement::Assignment(assignment) => {
-                            let raw_value = assignment.rvalue.span().as_str();
-                            let display_value = if raw_value.lines().count() <= 5 {
-                                raw_value
-                            } else {
-                                "..."
-                            };
-                            format!(
-                                "{} {} {}",
-                                assignment.lvalue.span().as_str(),
-                                assignment.op,
-                                display_value
-                            )
-                        }
-                        Statement::Call(call) => {
-                            assert_eq!(call.function.name, "forward_variables_from");
-                            call.span.as_str().to_string()
-                        }
-                        _ => unreachable!(),
-                    }
-                } else {
-                    format!("{} = ...", ident.name)
-                };
-                let position = first_assignment
-                    .document
-                    .line_index
-                    .position(first_assignment.statement.span().start());
-                docs.push(vec![
-                    MarkedString::from_language_code("gn".to_string(), snippet),
-                    if single_assignment {
-                        MarkedString::from_markdown(format!(
-                            "Defined at [{}:{}:{}]({}#L{},{})",
-                            current_file
-                                .workspace
-                                .format_path(&first_assignment.document.path),
-                            position.line + 1,
-                            position.character + 1,
-                            Url::from_file_path(&first_assignment.document.path).unwrap(),
-                            position.line + 1,
-                            position.character + 1,
-                        ))
-                    } else {
-                        MarkedString::from_markdown(format!(
-                            "Defined and modified in {} locations",
-                            variable.assignments.len()
-                        ))
-                    },
-                ]);
-            }
-        }
-
-        // Check builtin rules.
-        if let Some(symbol) = BUILTINS.all().find(|symbol| symbol.name == ident.name) {
-            docs.push(vec![MarkedString::from_markdown(symbol.doc.to_string())]);
-        }
-
-        if docs.is_empty() {
-            return Ok(None);
-        }
-
-        let contents = docs.join(&MarkedString::from_markdown("---".to_string()));
-        return Ok(Some(Hover {
-            contents: HoverContents::Array(contents),
-            range: Some(current_file.document.line_index.range(ident.span)),
-        }));
+        crate::providers::hover::hover(&self.context, params).await
     }
 
     async fn document_link(
         &self,
         params: DocumentLinkParams,
     ) -> RpcResult<Option<Vec<DocumentLink>>> {
-        let Ok(path) = params.text_document.uri.to_file_path() else {
-            return Ok(None);
-        };
-
-        let current_file = self
-            .analyzer
-            .lock()
-            .await
-            .analyze(&path)
-            .map_err(into_rpc_error)?;
-
-        let links = current_file
-            .links
-            .iter()
-            .map(|link| match link {
-                Link::File { path, span } => DocumentLink {
-                    target: Some(Url::from_file_path(path).unwrap()),
-                    range: current_file.document.line_index.range(*span),
-                    tooltip: None,
-                    data: None,
-                },
-                Link::Target { path, name, span } => DocumentLink {
-                    target: None, // Resolve with positions later.
-                    range: current_file.document.line_index.range(*span),
-                    tooltip: None,
-                    data: Some(
-                        serde_json::to_value(TargetLinkData {
-                            path: path.to_path_buf(),
-                            name: name.to_string(),
-                        })
-                        .unwrap(),
-                    ),
-                },
-            })
-            .collect();
-
-        Ok(Some(links))
+        crate::providers::document_link::document_link(&self.context, params).await
     }
 
-    async fn document_link_resolve(&self, mut link: DocumentLink) -> RpcResult<DocumentLink> {
-        let Some(data) = link
-            .data
-            .take()
-            .and_then(|value| serde_json::from_value::<TargetLinkData>(value).ok())
-        else {
-            return Err(tower_lsp::jsonrpc::Error::internal_error());
-        };
-
-        let target_file = self
-            .analyzer
-            .lock()
-            .await
-            .analyze(&data.path)
-            .map_err(into_rpc_error)?;
-
-        let Some(target) = target_file
-            .targets_at(usize::MAX)
-            .into_iter()
-            .find(|t| t.name == data.name)
-        else {
-            return Err(tower_lsp::jsonrpc::Error::internal_error());
-        };
-
-        let range = target.document.line_index.range(target.span);
-        let mut uri = Url::from_file_path(&data.path).unwrap();
-        uri.set_fragment(Some(&format!(
-            "L{},{}",
-            range.start.line + 1,
-            range.start.character + 1,
-        )));
-        link.target = Some(uri);
-        Ok(link)
+    async fn document_link_resolve(&self, link: DocumentLink) -> RpcResult<DocumentLink> {
+        crate::providers::document_link::document_link_resolve(&self.context, link).await
     }
 
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> RpcResult<Option<DocumentSymbolResponse>> {
-        let Ok(path) = params.text_document.uri.to_file_path() else {
-            return Ok(None);
-        };
-
-        let current_file = self
-            .analyzer
-            .lock()
-            .await
-            .analyze(&path)
-            .map_err(into_rpc_error)?;
-
-        Ok(Some(DocumentSymbolResponse::Nested(
-            current_file.symbols.clone(),
-        )))
+        crate::providers::document_symbol::document_symbol(&self.context, params).await
     }
 }
 
