@@ -17,7 +17,7 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use either::Either;
@@ -27,7 +27,7 @@ use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::{
     ast::{parse, AssignOp, Block, Expr, LValue, Node, PrimaryExpr, Statement},
-    storage::{Document, DocumentStorage},
+    storage::{Document, DocumentStorage, DocumentVersion},
     util::{parse_simple_literal, LineIndex},
 };
 
@@ -75,11 +75,8 @@ impl WorkspaceContext {
     }
 }
 
-fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
-    let workspace_root = path.parent().unwrap();
-
-    let input = std::fs::read_to_string(path)?;
-    let line_index = LineIndex::new(&input);
+fn evaluate_dot_gn(workspace_root: &Path, input: &str) -> std::io::Result<PathBuf> {
+    let line_index = LineIndex::new(input);
     let ast_root = parse(&input);
 
     let mut build_config_path: Option<PathBuf> = None;
@@ -100,7 +97,7 @@ fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "{}:{}:{}: buildconfig must be assigned exactly once",
-                    path.to_string_lossy(),
+                    workspace_root.join(".gn").to_string_lossy(),
                     position.line + 1,
                     position.character + 1
                 ),
@@ -111,7 +108,7 @@ fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "{}:{}:{}: buildconfig is not a simple string",
-                    path.to_string_lossy(),
+                    workspace_root.join(".gn").to_string_lossy(),
                     position.line + 1,
                     position.character + 1
                 ),
@@ -122,7 +119,7 @@ fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "{}:{}:{}: buildconfig is not a simple string",
-                    path.to_string_lossy(),
+                    workspace_root.join(".gn").to_string_lossy(),
                     position.line + 1,
                     position.character + 1
                 ),
@@ -137,7 +134,7 @@ fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "{}:{}:{}: buildconfig is assigned multiple times",
-                    path.to_string_lossy(),
+                    workspace_root.join(".gn").to_string_lossy(),
                     position.line + 1,
                     position.character + 1
                 ),
@@ -150,7 +147,7 @@ fn evaluate_dot_gn(path: &Path) -> std::io::Result<PathBuf> {
             std::io::ErrorKind::InvalidData,
             format!(
                 "{}: buildconfig is not assigned directly",
-                path.to_string_lossy()
+                workspace_root.join(".gn").to_string_lossy()
             ),
         ));
     };
@@ -694,86 +691,345 @@ impl From<LoopError> for std::io::Error {
     }
 }
 
-pub struct Analyzer {
-    storage: DocumentStorage,
-    cache_workspace: BTreeMap<PathBuf, WorkspaceContext>,
-    cache_fat: BTreeMap<PathBuf, Arc<AnalyzedFile>>,
-    cache_thin: BTreeMap<PathBuf, Arc<ThinAnalyzedFile>>,
+pub struct ThinAnalyzer {
+    storage: Arc<Mutex<DocumentStorage>>,
+    cache: BTreeMap<PathBuf, Arc<ThinAnalyzedFile>>,
 }
 
-impl Analyzer {
-    pub fn new(storage: DocumentStorage) -> Self {
+impl ThinAnalyzer {
+    pub fn new(storage: &Arc<Mutex<DocumentStorage>>) -> Self {
         Self {
-            storage,
-            cache_workspace: BTreeMap::new(),
-            cache_fat: BTreeMap::new(),
-            cache_thin: BTreeMap::new(),
+            storage: storage.clone(),
+            cache: BTreeMap::new(),
         }
     }
 
-    pub fn storage_mut(&mut self) -> &mut DocumentStorage {
-        &mut self.storage
-    }
-
-    pub fn analyze(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
-        let path = path.canonicalize()?;
-        let workspace = self.workspace_for(&path)?;
-        self.analyze_fat_cached(&path, &workspace)
-    }
-
-    fn workspace_for(&mut self, path: &Path) -> std::io::Result<WorkspaceContext> {
-        let workspace_root = find_workspace_root(path)?;
-        if let Some(workspace) = self.cache_workspace.get(&workspace_root) {
-            return Ok(workspace.clone());
-        }
-
-        let workspace = WorkspaceContext {
-            root: workspace_root.clone(),
-            build_config: evaluate_dot_gn(&workspace_root.join(".gn"))?,
-        };
-        self.cache_workspace
-            .insert(workspace_root, workspace.clone());
-        Ok(workspace)
-    }
-
-    fn analyze_fat_cached(
+    pub fn analyze(
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-    ) -> std::io::Result<Arc<AnalyzedFile>> {
-        if let Some(cached_file) = self.cache_fat.get(path) {
+    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
+        self.analyze_cached(path, workspace, &mut Vec::new())
+    }
+
+    fn analyze_cached(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+        actives: &mut Vec<PathBuf>,
+    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
+        if let Some(cached_file) = self.cache.get(path) {
             if &cached_file.workspace == workspace {
-                let latest_version = self.storage.read_version(path)?;
+                let latest_version = self.storage.lock().unwrap().read_version(path)?;
                 if latest_version == cached_file.document.version {
                     return Ok(cached_file.clone());
                 }
             }
         }
 
-        let new_file = self.analyze_fat_uncached(path, workspace)?;
-        self.cache_fat.insert(path.to_path_buf(), new_file.clone());
+        let new_file = self.analyze_uncached(path, workspace, actives)?;
+        self.cache.insert(path.to_path_buf(), new_file.clone());
 
         Ok(new_file)
     }
 
-    fn analyze_fat_uncached(
+    fn analyze_uncached(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+        actives: &mut Vec<PathBuf>,
+    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
+        if actives.iter().any(|p| p == path) {
+            return Err(LoopError {
+                cycle: std::mem::take(actives),
+            }
+            .into());
+        }
+
+        actives.push(path.to_path_buf());
+        let result = self.analyze_uncached_inner(path, workspace, actives);
+        actives.pop();
+        result
+    }
+
+    fn analyze_uncached_inner(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+        actives: &mut Vec<PathBuf>,
+    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
+        let document = match self.storage.lock().unwrap().read(path) {
+            Ok(document) => document,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                // Ignore missing imports as they might be imported conditionally.
+                return Ok(ThinAnalyzedFile::empty(path, workspace));
+            }
+            Err(err) => return Err(err),
+        };
+        let ast_root = Box::pin(parse(&document.data));
+        let analyzed_root = self.analyze_block(&ast_root, workspace, &document, actives)?;
+
+        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
+        let analyzed_root =
+            unsafe { std::mem::transmute::<ThinAnalyzedBlock, ThinAnalyzedBlock>(analyzed_root) };
+        // SAFETY: ast_root's contents are backed by pinned document.
+        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
+
+        Ok(Arc::new(ThinAnalyzedFile {
+            document,
+            workspace: workspace.clone(),
+            ast_root,
+            analyzed_root,
+        }))
+    }
+
+    fn analyze_block<'i, 'p>(
+        &mut self,
+        block: &'p Block<'i>,
+        workspace: &WorkspaceContext,
+        document: &'i Document,
+        actives: &mut Vec<PathBuf>,
+    ) -> std::io::Result<ThinAnalyzedBlock<'i, 'p>> {
+        let mut analyzed_block = ThinAnalyzedBlock::new_top_level();
+
+        for statement in &block.statements {
+            match statement {
+                Statement::Assignment(assignment) => {
+                    let identifier = match &assignment.lvalue {
+                        LValue::Identifier(identifier) => identifier,
+                        LValue::ArrayAccess(array_access) => &array_access.array,
+                        LValue::ScopeAccess(scope_access) => &scope_access.scope,
+                    };
+                    if is_exported(identifier.name) {
+                        analyzed_block.scope.insert(AnalyzedAssignment {
+                            name: identifier.name,
+                            statement,
+                            document,
+                            variable_span: identifier.span,
+                        });
+                    }
+                }
+                Statement::Call(call) => match call.function.name {
+                    "import" => {
+                        if let Some(name) = call
+                            .args
+                            .iter()
+                            .exactly_one()
+                            .ok()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            let path =
+                                workspace.resolve_path(name, document.path.parent().unwrap());
+                            let file = self.analyze_cached(&path, workspace, actives)?;
+                            analyzed_block.merge(&file.analyzed_root);
+                        }
+                    }
+                    "template" => {
+                        if let Some(name) = call
+                            .args
+                            .iter()
+                            .exactly_one()
+                            .ok()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            if is_exported(name) {
+                                analyzed_block.templates.insert(AnalyzedTemplate {
+                                    name,
+                                    comments: call
+                                        .comments
+                                        .as_ref()
+                                        .map(|comments| comments.text.clone()),
+                                    document,
+                                    header: call.function.span,
+                                    span: call.span,
+                                });
+                            }
+                        }
+                    }
+                    "declare_args" | "foreach" => {
+                        if let Some(block) = &call.block {
+                            analyzed_block
+                                .merge(&self.analyze_block(block, workspace, document, actives)?);
+                        }
+                    }
+                    "set_defaults" => {}
+                    "forward_variables_from" => {
+                        if let Some(strings) = call
+                            .args
+                            .get(1)
+                            .and_then(|expr| expr.as_primary_list())
+                            .map(|list| {
+                                list.values
+                                    .iter()
+                                    .filter_map(|expr| expr.as_primary_string())
+                                    .collect::<Vec<_>>()
+                            })
+                        {
+                            for string in strings {
+                                if let Some(name) = parse_simple_literal(string.raw_value) {
+                                    if is_exported(name) {
+                                        analyzed_block.scope.insert(AnalyzedAssignment {
+                                            name,
+                                            statement,
+                                            document,
+                                            variable_span: string.span,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(name) = call
+                            .args
+                            .iter()
+                            .exactly_one()
+                            .ok()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            analyzed_block.targets.insert(AnalyzedTarget {
+                                name,
+                                document,
+                                header: call.args[0].span(),
+                                span: call.span,
+                            });
+                        }
+                    }
+                },
+                Statement::Condition(condition) => {
+                    let mut current_condition = condition;
+                    loop {
+                        analyzed_block.merge(&self.analyze_block(
+                            &current_condition.then_block,
+                            workspace,
+                            document,
+                            actives,
+                        )?);
+                        match &current_condition.else_block {
+                            None => break,
+                            Some(Either::Left(next_condition)) => {
+                                current_condition = next_condition;
+                            }
+                            Some(Either::Right(block)) => {
+                                analyzed_block.merge(
+                                    &self.analyze_block(block, workspace, document, actives)?,
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                Statement::Unknown(_) | Statement::UnmatchedBrace(_) => {}
+            }
+        }
+
+        Ok(analyzed_block)
+    }
+}
+
+struct WorkspaceCache {
+    dot_gn_version: DocumentVersion,
+    context: WorkspaceContext,
+    files: BTreeMap<PathBuf, Arc<AnalyzedFile>>,
+}
+
+pub struct Analyzer {
+    thin_analyzer: ThinAnalyzer,
+    storage: Arc<Mutex<DocumentStorage>>,
+    cache: BTreeMap<PathBuf, WorkspaceCache>,
+}
+
+impl Analyzer {
+    pub fn new(storage: &Arc<Mutex<DocumentStorage>>) -> Self {
+        Self {
+            storage: storage.clone(),
+            thin_analyzer: ThinAnalyzer::new(storage),
+            cache: BTreeMap::new(),
+        }
+    }
+
+    pub fn analyze(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
+        let path = path.canonicalize()?;
+        self.analyze_cached(&path)
+    }
+
+    fn workspace_cache_for(&mut self, path: &Path) -> std::io::Result<&mut WorkspaceCache> {
+        let workspace_root = find_workspace_root(path)?;
+        let dot_gn_path = workspace_root.join(".gn");
+        let version = {
+            let storage = self.storage.lock().unwrap();
+            storage.read_version(&dot_gn_path)?
+        };
+
+        let cache_hit = self
+            .cache
+            .get(&workspace_root)
+            .is_some_and(|workspace_cache| workspace_cache.dot_gn_version == version);
+        if cache_hit {
+            return Ok(self.cache.get_mut(&workspace_root).unwrap());
+        }
+
+        let build_config = {
+            let storage = self.storage.lock().unwrap();
+            let document = storage.read(&dot_gn_path)?;
+            evaluate_dot_gn(&workspace_root, &document.data)?
+        };
+
+        let context = WorkspaceContext {
+            root: workspace_root.clone(),
+            build_config,
+        };
+
+        let workspace_cache = WorkspaceCache {
+            dot_gn_version: version,
+            context,
+            files: BTreeMap::new(),
+        };
+        Ok(self.cache.entry(workspace_root).or_insert(workspace_cache))
+    }
+
+    fn analyze_cached(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
+        let (cached_file, context) = {
+            let workspace_cache = self.workspace_cache_for(&path)?;
+            (
+                workspace_cache.files.get(path).cloned(),
+                workspace_cache.context.clone(),
+            )
+        };
+        if let Some(cached_file) = cached_file {
+            let storage = self.storage.lock().unwrap();
+            let latest_version = storage.read_version(path)?;
+            if latest_version == cached_file.document.version {
+                return Ok(cached_file);
+            }
+        }
+
+        let new_file = self.analyze_uncached(path, &context)?;
+        self.workspace_cache_for(&path)?
+            .files
+            .insert(path.to_path_buf(), new_file.clone());
+        Ok(new_file)
+    }
+
+    fn analyze_uncached(
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
     ) -> std::io::Result<Arc<AnalyzedFile>> {
-        let document = self.storage.read(path)?;
+        let document = self.storage.lock().unwrap().read(path)?;
         let ast_root = Box::pin(parse(&document.data));
 
-        let mut analyzed_root = self.analyze_fat_block(&ast_root, workspace, &document)?;
+        let mut analyzed_root = self.analyze_block(&ast_root, workspace, &document)?;
         // Insert a synthetic import of BUILDCONFIG.gn.
         analyzed_root.events.insert(
             0,
             AnalyzedEvent::Import(AnalyzedImport {
-                file: self.analyze_thin_cached(
-                    &workspace.build_config,
-                    workspace,
-                    &mut Vec::new(),
-                )?,
+                file: self
+                    .thin_analyzer
+                    .analyze(&workspace.build_config, workspace)?,
                 span: Span::new(&document.data, 0, 0).unwrap(),
             }),
         );
@@ -799,78 +1055,7 @@ impl Analyzer {
         }))
     }
 
-    fn analyze_thin_cached(
-        &mut self,
-        path: &Path,
-        workspace: &WorkspaceContext,
-        actives: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
-        if let Some(cached_file) = self.cache_thin.get(path) {
-            if &cached_file.workspace == workspace {
-                let latest_version = self.storage.read_version(path)?;
-                if latest_version == cached_file.document.version {
-                    return Ok(cached_file.clone());
-                }
-            }
-        }
-
-        let new_file = self.analyze_thin_uncached(path, workspace, actives)?;
-        self.cache_thin.insert(path.to_path_buf(), new_file.clone());
-
-        Ok(new_file)
-    }
-
-    fn analyze_thin_uncached(
-        &mut self,
-        path: &Path,
-        workspace: &WorkspaceContext,
-        actives: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
-        if actives.iter().any(|p| p == path) {
-            return Err(LoopError {
-                cycle: std::mem::take(actives),
-            }
-            .into());
-        }
-
-        actives.push(path.to_path_buf());
-        let result = self.analyze_thin_uncached_inner(path, workspace, actives);
-        actives.pop();
-        result
-    }
-
-    fn analyze_thin_uncached_inner(
-        &mut self,
-        path: &Path,
-        workspace: &WorkspaceContext,
-        actives: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
-        let document = match self.storage.read(path) {
-            Ok(document) => document,
-            Err(err) if err.kind() == ErrorKind::NotFound => {
-                // Ignore missing imports as they might be imported conditionally.
-                return Ok(ThinAnalyzedFile::empty(path, workspace));
-            }
-            Err(err) => return Err(err),
-        };
-        let ast_root = Box::pin(parse(&document.data));
-        let analyzed_root = self.analyze_thin_block(&ast_root, workspace, &document, actives)?;
-
-        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
-        let analyzed_root =
-            unsafe { std::mem::transmute::<ThinAnalyzedBlock, ThinAnalyzedBlock>(analyzed_root) };
-        // SAFETY: ast_root's contents are backed by pinned document.
-        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
-
-        Ok(Arc::new(ThinAnalyzedFile {
-            document,
-            workspace: workspace.clone(),
-            ast_root,
-            analyzed_root,
-        }))
-    }
-
-    fn analyze_fat_block<'i, 'p>(
+    fn analyze_block<'i, 'p>(
         &mut self,
         block: &'p Block<'i>,
         workspace: &WorkspaceContext,
@@ -894,7 +1079,7 @@ impl Analyzer {
                             document,
                             variable_span: identifier.span,
                         }));
-                        events.extend(self.analyze_fat_expr(
+                        events.extend(self.analyze_expr(
                             &assignment.rvalue,
                             workspace,
                             document,
@@ -914,11 +1099,7 @@ impl Analyzer {
                                 {
                                     let path = workspace
                                         .resolve_path(name, document.path.parent().unwrap());
-                                    let file = match self.analyze_thin_cached(
-                                        &path,
-                                        workspace,
-                                        &mut Vec::new(),
-                                    ) {
+                                    let file = match self.thin_analyzer.analyze(&path, workspace) {
                                         Err(err) if err.kind() == ErrorKind::NotFound => {
                                             // Ignore missing imports as they might be imported conditionally.
                                             ThinAnalyzedFile::empty(&path, workspace)
@@ -956,7 +1137,7 @@ impl Analyzer {
                                 }
                                 if let Some(block) = &call.block {
                                     events.push(AnalyzedEvent::NewScope(
-                                        self.analyze_fat_block(block, workspace, document)?,
+                                        self.analyze_block(block, workspace, document)?,
                                     ));
                                 }
                                 Ok(events)
@@ -964,7 +1145,7 @@ impl Analyzer {
                             "declare_args" => {
                                 if let Some(block) = &call.block {
                                     let analyzed_root =
-                                        self.analyze_fat_block(block, workspace, document)?;
+                                        self.analyze_block(block, workspace, document)?;
                                     Ok(vec![AnalyzedEvent::DeclareArgs(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -972,7 +1153,7 @@ impl Analyzer {
                             }
                             "foreach" => {
                                 if let Some(block) = &call.block {
-                                    Ok(self.analyze_fat_block(block, workspace, document)?.events)
+                                    Ok(self.analyze_block(block, workspace, document)?.events)
                                 } else {
                                     Ok(Vec::new())
                                 }
@@ -980,7 +1161,7 @@ impl Analyzer {
                             "set_defaults" => {
                                 if let Some(block) = &call.block {
                                     let analyzed_root =
-                                        self.analyze_fat_block(block, workspace, document)?;
+                                        self.analyze_block(block, workspace, document)?;
                                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -1033,7 +1214,7 @@ impl Analyzer {
                                 }
                                 if let Some(block) = &call.block {
                                     events.push(AnalyzedEvent::NewScope(
-                                        self.analyze_fat_block(block, workspace, document)?,
+                                        self.analyze_block(block, workspace, document)?,
                                     ));
                                 }
                                 Ok(events)
@@ -1045,12 +1226,12 @@ impl Analyzer {
                         let mut condition_blocks = Vec::new();
                         let mut current_condition = condition;
                         loop {
-                            events.extend(self.analyze_fat_expr(
+                            events.extend(self.analyze_expr(
                                 &current_condition.condition,
                                 workspace,
                                 document,
                             )?);
-                            condition_blocks.push(self.analyze_fat_block(
+                            condition_blocks.push(self.analyze_block(
                                 &current_condition.then_block,
                                 workspace,
                                 document,
@@ -1062,7 +1243,7 @@ impl Analyzer {
                                 }
                                 Some(Either::Right(block)) => {
                                     condition_blocks
-                                        .push(self.analyze_fat_block(block, workspace, document)?);
+                                        .push(self.analyze_block(block, workspace, document)?);
                                     break;
                                 }
                             }
@@ -1084,7 +1265,7 @@ impl Analyzer {
         })
     }
 
-    fn analyze_fat_expr<'i, 'p>(
+    fn analyze_expr<'i, 'p>(
         &mut self,
         expr: &'p Expr<'i>,
         workspace: &WorkspaceContext,
@@ -1093,31 +1274,31 @@ impl Analyzer {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr {
                 PrimaryExpr::Block(block) => {
-                    let analyzed_root = self.analyze_fat_block(block, workspace, document)?;
+                    let analyzed_root = self.analyze_block(block, workspace, document)?;
                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                 }
                 PrimaryExpr::Call(call) => {
                     let mut events: Vec<AnalyzedEvent> = call
                         .args
                         .iter()
-                        .map(|expr| self.analyze_fat_expr(expr, workspace, document))
+                        .map(|expr| self.analyze_expr(expr, workspace, document))
                         .collect::<std::io::Result<Vec<_>>>()?
                         .into_iter()
                         .flatten()
                         .collect();
                     if let Some(block) = &call.block {
-                        let analyzed_root = self.analyze_fat_block(block, workspace, document)?;
+                        let analyzed_root = self.analyze_block(block, workspace, document)?;
                         events.push(AnalyzedEvent::NewScope(analyzed_root));
                     }
                     Ok(events)
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
-                    self.analyze_fat_expr(&paren_expr.expr, workspace, document)
+                    self.analyze_expr(&paren_expr.expr, workspace, document)
                 }
                 PrimaryExpr::List(list_literal) => Ok(list_literal
                     .values
                     .iter()
-                    .map(|expr| self.analyze_fat_expr(expr, workspace, document))
+                    .map(|expr| self.analyze_expr(expr, workspace, document))
                     .collect::<std::io::Result<Vec<_>>>()?
                     .into_iter()
                     .flatten()
@@ -1128,160 +1309,12 @@ impl Analyzer {
                 | PrimaryExpr::ArrayAccess(_)
                 | PrimaryExpr::ScopeAccess(_) => Ok(Vec::new()),
             },
-            Expr::Unary(unary_expr) => self.analyze_fat_expr(&unary_expr.expr, workspace, document),
+            Expr::Unary(unary_expr) => self.analyze_expr(&unary_expr.expr, workspace, document),
             Expr::Binary(binary_expr) => {
-                let mut events = self.analyze_fat_expr(&binary_expr.lhs, workspace, document)?;
-                events.extend(self.analyze_fat_expr(&binary_expr.rhs, workspace, document)?);
+                let mut events = self.analyze_expr(&binary_expr.lhs, workspace, document)?;
+                events.extend(self.analyze_expr(&binary_expr.rhs, workspace, document)?);
                 Ok(events)
             }
         }
-    }
-
-    fn analyze_thin_block<'i, 'p>(
-        &mut self,
-        block: &'p Block<'i>,
-        workspace: &WorkspaceContext,
-        document: &'i Document,
-        actives: &mut Vec<PathBuf>,
-    ) -> std::io::Result<ThinAnalyzedBlock<'i, 'p>> {
-        let mut analyzed_block = ThinAnalyzedBlock::new_top_level();
-
-        for statement in &block.statements {
-            match statement {
-                Statement::Assignment(assignment) => {
-                    let identifier = match &assignment.lvalue {
-                        LValue::Identifier(identifier) => identifier,
-                        LValue::ArrayAccess(array_access) => &array_access.array,
-                        LValue::ScopeAccess(scope_access) => &scope_access.scope,
-                    };
-                    if is_exported(identifier.name) {
-                        analyzed_block.scope.insert(AnalyzedAssignment {
-                            name: identifier.name,
-                            statement,
-                            document,
-                            variable_span: identifier.span,
-                        });
-                    }
-                }
-                Statement::Call(call) => match call.function.name {
-                    "import" => {
-                        if let Some(name) = call
-                            .args
-                            .iter()
-                            .exactly_one()
-                            .ok()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
-                        {
-                            let path =
-                                workspace.resolve_path(name, document.path.parent().unwrap());
-                            let file = self.analyze_thin_cached(&path, workspace, actives)?;
-                            analyzed_block.merge(&file.analyzed_root);
-                        }
-                    }
-                    "template" => {
-                        if let Some(name) = call
-                            .args
-                            .iter()
-                            .exactly_one()
-                            .ok()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
-                        {
-                            if is_exported(name) {
-                                analyzed_block.templates.insert(AnalyzedTemplate {
-                                    name,
-                                    comments: call
-                                        .comments
-                                        .as_ref()
-                                        .map(|comments| comments.text.clone()),
-                                    document,
-                                    header: call.function.span,
-                                    span: call.span,
-                                });
-                            }
-                        }
-                    }
-                    "declare_args" | "foreach" => {
-                        if let Some(block) = &call.block {
-                            analyzed_block.merge(
-                                &self.analyze_thin_block(block, workspace, document, actives)?,
-                            );
-                        }
-                    }
-                    "set_defaults" => {}
-                    "forward_variables_from" => {
-                        if let Some(strings) = call
-                            .args
-                            .get(1)
-                            .and_then(|expr| expr.as_primary_list())
-                            .map(|list| {
-                                list.values
-                                    .iter()
-                                    .filter_map(|expr| expr.as_primary_string())
-                                    .collect::<Vec<_>>()
-                            })
-                        {
-                            for string in strings {
-                                if let Some(name) = parse_simple_literal(string.raw_value) {
-                                    if is_exported(name) {
-                                        analyzed_block.scope.insert(AnalyzedAssignment {
-                                            name,
-                                            statement,
-                                            document,
-                                            variable_span: string.span,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        if let Some(name) = call
-                            .args
-                            .iter()
-                            .exactly_one()
-                            .ok()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
-                        {
-                            analyzed_block.targets.insert(AnalyzedTarget {
-                                name,
-                                document,
-                                header: call.args[0].span(),
-                                span: call.span,
-                            });
-                        }
-                    }
-                },
-                Statement::Condition(condition) => {
-                    let mut current_condition = condition;
-                    loop {
-                        analyzed_block.merge(&self.analyze_thin_block(
-                            &current_condition.then_block,
-                            workspace,
-                            document,
-                            actives,
-                        )?);
-                        match &current_condition.else_block {
-                            None => break,
-                            Some(Either::Left(next_condition)) => {
-                                current_condition = next_condition;
-                            }
-                            Some(Either::Right(block)) => {
-                                analyzed_block.merge(
-                                    &self
-                                        .analyze_thin_block(block, workspace, document, actives)?,
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-                Statement::Unknown(_) | Statement::UnmatchedBrace(_) => {}
-            }
-        }
-
-        Ok(analyzed_block)
     }
 }

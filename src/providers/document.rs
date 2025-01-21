@@ -23,7 +23,7 @@ pub async fn did_open(context: &ProviderContext, params: DidOpenTextDocumentPara
         return;
     };
 
-    context.analyzer.lock().await.storage_mut().load_to_memory(
+    context.storage.lock().unwrap().load_to_memory(
         &path,
         &params.text_document.text,
         params.text_document.version,
@@ -38,7 +38,7 @@ pub async fn did_change(context: &ProviderContext, params: DidChangeTextDocument
         return;
     };
 
-    context.analyzer.lock().await.storage_mut().load_to_memory(
+    context.storage.lock().unwrap().load_to_memory(
         &path,
         &change.text,
         params.text_document.version,
@@ -50,10 +50,5 @@ pub async fn did_close(context: &ProviderContext, params: DidCloseTextDocumentPa
         return;
     };
 
-    context
-        .analyzer
-        .lock()
-        .await
-        .storage_mut()
-        .unload_from_memory(&path);
+    context.storage.lock().unwrap().unload_from_memory(&path);
 }

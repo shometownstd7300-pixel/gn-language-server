@@ -38,7 +38,7 @@ pub async fn document_link(
     let current_file = context
         .analyzer
         .lock()
-        .await
+        .unwrap()
         .analyze(&path)
         .map_err(into_rpc_error)?;
 
@@ -85,7 +85,7 @@ pub async fn document_link_resolve(
     let target_file = context
         .analyzer
         .lock()
-        .await
+        .unwrap()
         .analyze(&data.path)
         .map_err(into_rpc_error)?;
 

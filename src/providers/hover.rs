@@ -35,7 +35,7 @@ pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<
     let current_file = context
         .analyzer
         .lock()
-        .await
+        .unwrap()
         .analyze(&path)
         .map_err(into_rpc_error)?;
 

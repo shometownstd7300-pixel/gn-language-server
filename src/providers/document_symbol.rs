@@ -27,7 +27,7 @@ pub async fn document_symbol(
     let current_file = context
         .analyzer
         .lock()
-        .await
+        .unwrap()
         .analyze(&path)
         .map_err(into_rpc_error)?;
 

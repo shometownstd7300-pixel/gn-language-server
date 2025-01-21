@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use itertools::Itertools;
-use tokio::{spawn, sync::Mutex};
+use tokio::spawn;
 use tower_lsp::{
     lsp_types::{
         CompletionOptions, CompletionParams, CompletionResponse, ConfigurationItem,
@@ -41,10 +45,15 @@ struct Backend {
 }
 
 impl Backend {
-    pub fn new(analyzer: Analyzer, client: Client) -> Self {
+    pub fn new(
+        storage: &Arc<Mutex<DocumentStorage>>,
+        analyzer: &Arc<Mutex<Analyzer>>,
+        client: Client,
+    ) -> Self {
         Self {
             context: ProviderContext {
-                analyzer: Arc::new(Mutex::new(analyzer)),
+                storage: storage.clone(),
+                analyzer: analyzer.clone(),
                 client,
             },
             indexed_workspaces: Mutex::new(HashSet::new()),
@@ -111,7 +120,7 @@ impl LanguageServer for Backend {
             if let Ok(path) = params.text_document.uri.to_file_path() {
                 if let Ok(workspace_root) = find_workspace_root(&path) {
                     let do_index = {
-                        let mut indexed_workspaces = self.indexed_workspaces.lock().await;
+                        let mut indexed_workspaces = self.indexed_workspaces.lock().unwrap();
                         indexed_workspaces.insert(workspace_root.clone())
                     };
                     if do_index {
@@ -169,8 +178,10 @@ impl LanguageServer for Backend {
 }
 
 pub async fn run() {
-    let analyzer = Analyzer::new(DocumentStorage::new());
-    let (service, socket) = LspService::new(move |client| Backend::new(analyzer, client));
+    let storage = Arc::new(Mutex::new(DocumentStorage::new()));
+    let analyzer = Arc::new(Mutex::new(Analyzer::new(&storage)));
+    let (service, socket) =
+        LspService::new(move |client| Backend::new(&storage, &analyzer, client));
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();

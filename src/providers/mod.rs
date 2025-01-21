@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
-use tokio::sync::Mutex;
 use tower_lsp::{lsp_types::Position, Client};
 
 use crate::{
     analyze::{AnalyzedFile, Analyzer},
     ast::{Identifier, Node},
+    storage::DocumentStorage,
 };
 
 pub mod completion;
@@ -34,6 +37,7 @@ pub type RpcResult<T> = tower_lsp::jsonrpc::Result<T>;
 
 #[derive(Clone)]
 pub struct ProviderContext {
+    pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Mutex<Analyzer>>,
     pub client: Client,
 }
