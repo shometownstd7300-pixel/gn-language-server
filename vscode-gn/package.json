@@ -40,7 +40,17 @@
         "scopeName": "source.gn",
         "path": "./syntaxes/gn.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "GN",
+      "properties": {
+        "gn.experimental.backgroundIndexing": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enables background indexing"
+        }
+      }
+    }
   },
   "scripts": {
     "build": "npm run build-extension && npm run build-server",

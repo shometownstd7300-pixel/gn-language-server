@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use tokio::sync::Mutex;
 use tower_lsp::{lsp_types::Position, Client};
@@ -28,11 +28,13 @@ pub mod document_link;
 pub mod document_symbol;
 pub mod goto_definition;
 pub mod hover;
+pub mod indexing;
 
 pub type RpcResult<T> = tower_lsp::jsonrpc::Result<T>;
 
+#[derive(Clone)]
 pub struct ProviderContext {
-    pub analyzer: Mutex<Analyzer>,
+    pub analyzer: Arc<Mutex<Analyzer>>,
     pub client: Client,
 }
 

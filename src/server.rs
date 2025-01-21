@@ -12,37 +12,63 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tokio::sync::Mutex;
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
+
+use itertools::Itertools;
+use tokio::{spawn, sync::Mutex};
 use tower_lsp::{
     lsp_types::{
-        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions,
-        DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-        GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
-        InitializeResult, InitializedParams, MessageType, OneOf, ServerCapabilities,
-        TextDocumentSyncCapability, TextDocumentSyncKind,
+        CompletionOptions, CompletionParams, CompletionResponse, ConfigurationItem,
+        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams,
+        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+        HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+        MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
     },
     Client, LanguageServer, LspService, Server,
 };
 
 use crate::{
-    analyze::Analyzer,
+    analyze::{find_workspace_root, Analyzer},
+    config::Configurations,
     providers::{ProviderContext, RpcResult},
     storage::DocumentStorage,
 };
 
 struct Backend {
     context: ProviderContext,
+    indexed_workspaces: Mutex<HashSet<PathBuf>>,
 }
 
 impl Backend {
     pub fn new(analyzer: Analyzer, client: Client) -> Self {
         Self {
             context: ProviderContext {
-                analyzer: Mutex::new(analyzer),
+                analyzer: Arc::new(Mutex::new(analyzer)),
                 client,
             },
+            indexed_workspaces: Mutex::new(HashSet::new()),
         }
+    }
+
+    async fn get_configurations(&self) -> Configurations {
+        let Ok(values) = self
+            .context
+            .client
+            .configuration(vec![ConfigurationItem {
+                scope_uri: None,
+                section: Some("gn".to_string()),
+            }])
+            .await
+        else {
+            return Configurations::default();
+        };
+
+        let Ok(value) = values.into_iter().exactly_one() else {
+            return Configurations::default();
+        };
+
+        serde_json::from_value(value).unwrap_or_default()
     }
 }
 
@@ -80,6 +106,23 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let configurations = self.get_configurations().await;
+        if configurations.experimental.background_indexing {
+            if let Ok(path) = params.text_document.uri.to_file_path() {
+                if let Ok(workspace_root) = find_workspace_root(&path) {
+                    let do_index = {
+                        let mut indexed_workspaces = self.indexed_workspaces.lock().await;
+                        indexed_workspaces.insert(workspace_root.clone())
+                    };
+                    if do_index {
+                        let context = self.context.clone();
+                        spawn(async move {
+                            crate::providers::indexing::index(&context, &workspace_root).await;
+                        });
+                    }
+                }
+            };
+        }
         crate::providers::document::did_open(&self.context, params).await;
     }
 

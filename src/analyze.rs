@@ -35,7 +35,7 @@ fn is_exported(name: &str) -> bool {
     !name.starts_with("_")
 }
 
-fn find_workspace_root(path: &Path) -> std::io::Result<PathBuf> {
+pub fn find_workspace_root(path: &Path) -> std::io::Result<PathBuf> {
     for dir in path.ancestors().skip(1) {
         if dir.join(".gn").try_exists()? {
             return Ok(dir.to_path_buf());
