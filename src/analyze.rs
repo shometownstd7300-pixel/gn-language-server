@@ -160,11 +160,25 @@ pub struct AnalyzedFile {
     pub workspace: WorkspaceContext,
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
+    pub deps: Vec<Arc<ThinAnalyzedFile>>,
     pub links: Vec<Link<'static>>,
     pub symbols: Vec<DocumentSymbol>,
 }
 
 impl AnalyzedFile {
+    pub fn is_fresh(&self, storage: &DocumentStorage) -> std::io::Result<bool> {
+        let version = storage.read_version(&self.document.path)?;
+        if version != self.document.version {
+            return Ok(false);
+        }
+        for dep in &self.deps {
+            if !dep.is_fresh(storage)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub fn scope_at(&self, pos: usize) -> AnalyzedScope {
         self.analyzed_root.scope_at(pos, None)
     }
@@ -184,6 +198,7 @@ pub struct ThinAnalyzedFile {
     #[allow(unused)] // Backing analyzed_root
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: ThinAnalyzedBlock<'static, 'static>,
+    pub deps: Vec<Arc<ThinAnalyzedFile>>,
 }
 
 impl ThinAnalyzedFile {
@@ -201,7 +216,21 @@ impl ThinAnalyzedFile {
             workspace: workspace.clone(),
             ast_root,
             analyzed_root,
+            deps: Vec::new(),
         })
+    }
+
+    pub fn is_fresh(&self, storage: &DocumentStorage) -> std::io::Result<bool> {
+        let version = storage.read_version(&self.document.path)?;
+        if version != self.document.version {
+            return Ok(false);
+        }
+        for dep in &self.deps {
+            if !dep.is_fresh(storage)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -716,18 +745,17 @@ impl ThinAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        actives: &mut Vec<PathBuf>,
+        visiting: &mut Vec<PathBuf>,
     ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
         if let Some(cached_file) = self.cache.get(path) {
-            if &cached_file.workspace == workspace {
-                let latest_version = self.storage.lock().unwrap().read_version(path)?;
-                if latest_version == cached_file.document.version {
-                    return Ok(cached_file.clone());
-                }
+            if &cached_file.workspace == workspace
+                && cached_file.is_fresh(&self.storage.lock().unwrap())?
+            {
+                return Ok(cached_file.clone());
             }
         }
 
-        let new_file = self.analyze_uncached(path, workspace, actives)?;
+        let new_file = self.analyze_uncached(path, workspace, visiting)?;
         self.cache.insert(path.to_path_buf(), new_file.clone());
 
         Ok(new_file)
@@ -737,18 +765,18 @@ impl ThinAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        actives: &mut Vec<PathBuf>,
+        visiting: &mut Vec<PathBuf>,
     ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
-        if actives.iter().any(|p| p == path) {
+        if visiting.iter().any(|p| p == path) {
             return Err(LoopError {
-                cycle: std::mem::take(actives),
+                cycle: std::mem::take(visiting),
             }
             .into());
         }
 
-        actives.push(path.to_path_buf());
-        let result = self.analyze_uncached_inner(path, workspace, actives);
-        actives.pop();
+        visiting.push(path.to_path_buf());
+        let result = self.analyze_uncached_inner(path, workspace, visiting);
+        visiting.pop();
         result
     }
 
@@ -756,7 +784,7 @@ impl ThinAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        actives: &mut Vec<PathBuf>,
+        visiting: &mut Vec<PathBuf>,
     ) -> std::io::Result<Arc<ThinAnalyzedFile>> {
         let document = match self.storage.lock().unwrap().read(path) {
             Ok(document) => document,
@@ -767,7 +795,9 @@ impl ThinAnalyzer {
             Err(err) => return Err(err),
         };
         let ast_root = Box::pin(parse(&document.data));
-        let analyzed_root = self.analyze_block(&ast_root, workspace, &document, actives)?;
+        let mut deps = Vec::new();
+        let analyzed_root =
+            self.analyze_block(&ast_root, workspace, &document, &mut deps, visiting)?;
 
         // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
         let analyzed_root =
@@ -780,6 +810,7 @@ impl ThinAnalyzer {
             workspace: workspace.clone(),
             ast_root,
             analyzed_root,
+            deps,
         }))
     }
 
@@ -788,7 +819,8 @@ impl ThinAnalyzer {
         block: &'p Block<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
-        actives: &mut Vec<PathBuf>,
+        deps: &mut Vec<Arc<ThinAnalyzedFile>>,
+        visiting: &mut Vec<PathBuf>,
     ) -> std::io::Result<ThinAnalyzedBlock<'i, 'p>> {
         let mut analyzed_block = ThinAnalyzedBlock::new_top_level();
 
@@ -821,8 +853,9 @@ impl ThinAnalyzer {
                         {
                             let path =
                                 workspace.resolve_path(name, document.path.parent().unwrap());
-                            let file = self.analyze_cached(&path, workspace, actives)?;
+                            let file = self.analyze_cached(&path, workspace, visiting)?;
                             analyzed_block.merge(&file.analyzed_root);
+                            deps.push(file);
                         }
                     }
                     "template" => {
@@ -850,8 +883,9 @@ impl ThinAnalyzer {
                     }
                     "declare_args" | "foreach" => {
                         if let Some(block) = &call.block {
-                            analyzed_block
-                                .merge(&self.analyze_block(block, workspace, document, actives)?);
+                            analyzed_block.merge(
+                                &self.analyze_block(block, workspace, document, deps, visiting)?,
+                            );
                         }
                     }
                     "set_defaults" => {}
@@ -906,7 +940,8 @@ impl ThinAnalyzer {
                             &current_condition.then_block,
                             workspace,
                             document,
-                            actives,
+                            deps,
+                            visiting,
                         )?);
                         match &current_condition.else_block {
                             None => break,
@@ -915,7 +950,9 @@ impl ThinAnalyzer {
                             }
                             Some(Either::Right(block)) => {
                                 analyzed_block.merge(
-                                    &self.analyze_block(block, workspace, document, actives)?,
+                                    &self.analyze_block(
+                                        block, workspace, document, deps, visiting,
+                                    )?,
                                 );
                                 break;
                             }
@@ -959,7 +996,7 @@ impl Analyzer {
     fn workspace_cache_for(&mut self, path: &Path) -> std::io::Result<&mut WorkspaceCache> {
         let workspace_root = find_workspace_root(path)?;
         let dot_gn_path = workspace_root.join(".gn");
-        let version = {
+        let dot_gn_version = {
             let storage = self.storage.lock().unwrap();
             storage.read_version(&dot_gn_path)?
         };
@@ -967,7 +1004,7 @@ impl Analyzer {
         let cache_hit = self
             .cache
             .get(&workspace_root)
-            .is_some_and(|workspace_cache| workspace_cache.dot_gn_version == version);
+            .is_some_and(|workspace_cache| workspace_cache.dot_gn_version == dot_gn_version);
         if cache_hit {
             return Ok(self.cache.get_mut(&workspace_root).unwrap());
         }
@@ -984,7 +1021,7 @@ impl Analyzer {
         };
 
         let workspace_cache = WorkspaceCache {
-            dot_gn_version: version,
+            dot_gn_version,
             context,
             files: BTreeMap::new(),
         };
@@ -1001,8 +1038,7 @@ impl Analyzer {
         };
         if let Some(cached_file) = cached_file {
             let storage = self.storage.lock().unwrap();
-            let latest_version = storage.read_version(path)?;
-            if latest_version == cached_file.document.version {
+            if cached_file.is_fresh(&storage)? {
                 return Ok(cached_file);
             }
         }
@@ -1022,7 +1058,8 @@ impl Analyzer {
         let document = self.storage.lock().unwrap().read(path)?;
         let ast_root = Box::pin(parse(&document.data));
 
-        let mut analyzed_root = self.analyze_block(&ast_root, workspace, &document)?;
+        let mut deps = Vec::new();
+        let mut analyzed_root = self.analyze_block(&ast_root, workspace, &document, &mut deps)?;
         // Insert a synthetic import of BUILDCONFIG.gn.
         analyzed_root.events.insert(
             0,
@@ -1050,6 +1087,7 @@ impl Analyzer {
             workspace: workspace.clone(),
             ast_root,
             analyzed_root,
+            deps,
             links,
             symbols,
         }))
@@ -1060,6 +1098,7 @@ impl Analyzer {
         block: &'p Block<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
+        deps: &mut Vec<Arc<ThinAnalyzedFile>>,
     ) -> std::io::Result<AnalyzedBlock<'i, 'p>> {
         let events: Vec<AnalyzedEvent> = block
             .statements
@@ -1083,6 +1122,7 @@ impl Analyzer {
                             &assignment.rvalue,
                             workspace,
                             document,
+                            deps,
                         )?);
                         Ok(events)
                     }
@@ -1106,6 +1146,7 @@ impl Analyzer {
                                         }
                                         other => other?,
                                     };
+                                    deps.push(file.clone());
                                     Ok(vec![AnalyzedEvent::Import(AnalyzedImport {
                                         file,
                                         span: call.span(),
@@ -1137,7 +1178,7 @@ impl Analyzer {
                                 }
                                 if let Some(block) = &call.block {
                                     events.push(AnalyzedEvent::NewScope(
-                                        self.analyze_block(block, workspace, document)?,
+                                        self.analyze_block(block, workspace, document, deps)?,
                                     ));
                                 }
                                 Ok(events)
@@ -1145,7 +1186,7 @@ impl Analyzer {
                             "declare_args" => {
                                 if let Some(block) = &call.block {
                                     let analyzed_root =
-                                        self.analyze_block(block, workspace, document)?;
+                                        self.analyze_block(block, workspace, document, deps)?;
                                     Ok(vec![AnalyzedEvent::DeclareArgs(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -1153,7 +1194,7 @@ impl Analyzer {
                             }
                             "foreach" => {
                                 if let Some(block) = &call.block {
-                                    Ok(self.analyze_block(block, workspace, document)?.events)
+                                    Ok(self.analyze_block(block, workspace, document, deps)?.events)
                                 } else {
                                     Ok(Vec::new())
                                 }
@@ -1161,7 +1202,7 @@ impl Analyzer {
                             "set_defaults" => {
                                 if let Some(block) = &call.block {
                                     let analyzed_root =
-                                        self.analyze_block(block, workspace, document)?;
+                                        self.analyze_block(block, workspace, document, deps)?;
                                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -1214,7 +1255,7 @@ impl Analyzer {
                                 }
                                 if let Some(block) = &call.block {
                                     events.push(AnalyzedEvent::NewScope(
-                                        self.analyze_block(block, workspace, document)?,
+                                        self.analyze_block(block, workspace, document, deps)?,
                                     ));
                                 }
                                 Ok(events)
@@ -1230,11 +1271,13 @@ impl Analyzer {
                                 &current_condition.condition,
                                 workspace,
                                 document,
+                                deps,
                             )?);
                             condition_blocks.push(self.analyze_block(
                                 &current_condition.then_block,
                                 workspace,
                                 document,
+                                deps,
                             )?);
                             match &current_condition.else_block {
                                 None => break,
@@ -1242,8 +1285,9 @@ impl Analyzer {
                                     current_condition = next_condition;
                                 }
                                 Some(Either::Right(block)) => {
-                                    condition_blocks
-                                        .push(self.analyze_block(block, workspace, document)?);
+                                    condition_blocks.push(
+                                        self.analyze_block(block, workspace, document, deps)?,
+                                    );
                                     break;
                                 }
                             }
@@ -1270,35 +1314,36 @@ impl Analyzer {
         expr: &'p Expr<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
+        deps: &mut Vec<Arc<ThinAnalyzedFile>>,
     ) -> std::io::Result<Vec<AnalyzedEvent<'i, 'p>>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr {
                 PrimaryExpr::Block(block) => {
-                    let analyzed_root = self.analyze_block(block, workspace, document)?;
+                    let analyzed_root = self.analyze_block(block, workspace, document, deps)?;
                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                 }
                 PrimaryExpr::Call(call) => {
                     let mut events: Vec<AnalyzedEvent> = call
                         .args
                         .iter()
-                        .map(|expr| self.analyze_expr(expr, workspace, document))
+                        .map(|expr| self.analyze_expr(expr, workspace, document, deps))
                         .collect::<std::io::Result<Vec<_>>>()?
                         .into_iter()
                         .flatten()
                         .collect();
                     if let Some(block) = &call.block {
-                        let analyzed_root = self.analyze_block(block, workspace, document)?;
+                        let analyzed_root = self.analyze_block(block, workspace, document, deps)?;
                         events.push(AnalyzedEvent::NewScope(analyzed_root));
                     }
                     Ok(events)
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
-                    self.analyze_expr(&paren_expr.expr, workspace, document)
+                    self.analyze_expr(&paren_expr.expr, workspace, document, deps)
                 }
                 PrimaryExpr::List(list_literal) => Ok(list_literal
                     .values
                     .iter()
-                    .map(|expr| self.analyze_expr(expr, workspace, document))
+                    .map(|expr| self.analyze_expr(expr, workspace, document, deps))
                     .collect::<std::io::Result<Vec<_>>>()?
                     .into_iter()
                     .flatten()
@@ -1309,10 +1354,12 @@ impl Analyzer {
                 | PrimaryExpr::ArrayAccess(_)
                 | PrimaryExpr::ScopeAccess(_) => Ok(Vec::new()),
             },
-            Expr::Unary(unary_expr) => self.analyze_expr(&unary_expr.expr, workspace, document),
+            Expr::Unary(unary_expr) => {
+                self.analyze_expr(&unary_expr.expr, workspace, document, deps)
+            }
             Expr::Binary(binary_expr) => {
-                let mut events = self.analyze_expr(&binary_expr.lhs, workspace, document)?;
-                events.extend(self.analyze_expr(&binary_expr.rhs, workspace, document)?);
+                let mut events = self.analyze_expr(&binary_expr.lhs, workspace, document, deps)?;
+                events.extend(self.analyze_expr(&binary_expr.rhs, workspace, document, deps)?);
                 Ok(events)
             }
         }
