@@ -1060,16 +1060,19 @@ impl Analyzer {
 
         let mut deps = Vec::new();
         let mut analyzed_root = self.analyze_block(&ast_root, workspace, &document, &mut deps)?;
+
         // Insert a synthetic import of BUILDCONFIG.gn.
+        let dot_gn_file = self
+            .thin_analyzer
+            .analyze(&workspace.build_config, workspace)?;
         analyzed_root.events.insert(
             0,
             AnalyzedEvent::Import(AnalyzedImport {
-                file: self
-                    .thin_analyzer
-                    .analyze(&workspace.build_config, workspace)?,
+                file: dot_gn_file.clone(),
                 span: Span::new(&document.data, 0, 0).unwrap(),
             }),
         );
+        deps.push(dot_gn_file);
 
         let links = collect_links(&ast_root, path, workspace);
         let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
