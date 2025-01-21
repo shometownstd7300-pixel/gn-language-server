@@ -62,8 +62,8 @@ impl<'i, 'n> Iterator for Walk<'i, 'n> {
         Some(node)
     }
 }
-
 pub struct FilterWalk<'i, 'n, T> {
+    #[allow(clippy::type_complexity)]
     inner: std::iter::FilterMap<Walk<'i, 'n>, fn(&'n dyn Node<'i>) -> Option<&'n T>>,
 }
 

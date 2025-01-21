@@ -77,7 +77,7 @@ impl WorkspaceContext {
 
 fn evaluate_dot_gn(workspace_root: &Path, input: &str) -> std::io::Result<PathBuf> {
     let line_index = LineIndex::new(input);
-    let ast_root = parse(&input);
+    let ast_root = parse(input);
 
     let mut build_config_path: Option<PathBuf> = None;
 
@@ -1030,7 +1030,7 @@ impl Analyzer {
 
     fn analyze_cached(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
         let (cached_file, context) = {
-            let workspace_cache = self.workspace_cache_for(&path)?;
+            let workspace_cache = self.workspace_cache_for(path)?;
             (
                 workspace_cache.files.get(path).cloned(),
                 workspace_cache.context.clone(),
@@ -1044,7 +1044,7 @@ impl Analyzer {
         }
 
         let new_file = self.analyze_uncached(path, &context)?;
-        self.workspace_cache_for(&path)?
+        self.workspace_cache_for(path)?
             .files
             .insert(path.to_path_buf(), new_file.clone());
         Ok(new_file)
