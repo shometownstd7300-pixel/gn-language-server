@@ -120,10 +120,10 @@ pub async fn completion(
     let template_items = templates.iter().map(|template| {
         let doc_header = format!("```gn\ntemplate(\"{}\") {{ ... }}\n```\n", template.name);
 
-        let doc_comments = if let Some(comments) = &template.comments {
-            format!("```text\n{}\n```\n", comments)
-        } else {
+        let doc_comments = if template.comments.is_empty() {
             String::new()
+        } else {
+            format!("```text\n{}\n```\n", template.comments)
         };
 
         let doc = [doc_header, doc_comments].concat();

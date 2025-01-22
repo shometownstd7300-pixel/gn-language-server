@@ -124,7 +124,7 @@ fn convert_scope_access(pair: Pair<Rule>) -> ScopeAccess {
 fn convert_block(pair: Pair<Rule>) -> Block {
     assert!(matches!(pair.as_rule(), Rule::block));
     let span = pair.as_span();
-    let mut comments: Vec<_> = Vec::new();
+    let mut comments = Comments::default();
     let statements = pair
         .into_inner()
         .filter_map(|pair| match pair.as_rule() {
@@ -134,7 +134,9 @@ fn convert_block(pair: Pair<Rule>) -> Block {
                 span: pair.as_span(),
             })),
             Rule::comment => {
-                comments.push(pair.into_inner().exactly_one().unwrap().as_str());
+                comments
+                    .lines
+                    .push(pair.into_inner().exactly_one().unwrap().as_str());
                 None
             }
             _ => unreachable!(),
@@ -148,7 +150,7 @@ fn convert_primary(pair: Pair<Rule>) -> PrimaryExpr {
         Rule::identifier => PrimaryExpr::Identifier(convert_identifier(pair)),
         Rule::integer => PrimaryExpr::Integer(convert_integer(pair)),
         Rule::string => PrimaryExpr::String(convert_string(pair)),
-        Rule::call => PrimaryExpr::Call(convert_call(pair, Vec::new())),
+        Rule::call => PrimaryExpr::Call(convert_call(pair, Comments::default())),
         Rule::array_access => PrimaryExpr::ArrayAccess(convert_array_access(pair)),
         Rule::scope_access => PrimaryExpr::ScopeAccess(convert_scope_access(pair)),
         Rule::block => PrimaryExpr::Block(convert_block(pair)),
@@ -240,7 +242,7 @@ fn convert_assign_op(pair: Pair<Rule>) -> AssignOp {
     }
 }
 
-fn convert_assignment<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Assignment<'i> {
+fn convert_assignment<'i>(pair: Pair<'i, Rule>, comments: Comments<'i>) -> Assignment<'i> {
     assert!(matches!(pair.as_rule(), Rule::assignment));
     let span = pair.as_span();
     let (lvalue_pair, assign_op_pair, expr_pair) = pair.into_inner().collect_tuple().unwrap();
@@ -251,18 +253,12 @@ fn convert_assignment<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Assignme
         lvalue,
         op: assign_op,
         rvalue: Box::new(expr),
-        comments: if comments.is_empty() {
-            None
-        } else {
-            Some(Comments {
-                text: comments.join("\n"),
-            })
-        },
+        comments,
         span,
     }
 }
 
-fn convert_call<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Call<'i> {
+fn convert_call<'i>(pair: Pair<'i, Rule>, comments: Comments<'i>) -> Call<'i> {
     assert!(matches!(pair.as_rule(), Rule::call));
     let span = pair.as_span();
     let mut pairs = pair.into_inner();
@@ -273,13 +269,7 @@ fn convert_call<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Call<'i> {
         function,
         args,
         block,
-        comments: if comments.is_empty() {
-            None
-        } else {
-            Some(Comments {
-                text: comments.join("\n"),
-            })
-        },
+        comments,
         span,
     }
 }
@@ -310,7 +300,7 @@ fn convert_condition(pair: Pair<Rule>) -> Condition {
     }
 }
 
-fn convert_statement<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Statement<'i> {
+fn convert_statement<'i>(pair: Pair<'i, Rule>, comments: Comments<'i>) -> Statement<'i> {
     assert!(matches!(pair.as_rule(), Rule::statement));
     let pair = pair.into_inner().exactly_one().unwrap();
     match pair.as_rule() {
@@ -324,7 +314,7 @@ fn convert_statement<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Statement
 fn convert_file(pair: Pair<Rule>) -> Block {
     assert!(matches!(pair.as_rule(), Rule::file));
     let span = pair.as_span();
-    let mut comments: Vec<_> = Vec::new();
+    let mut comments = Comments::default();
     let statements = pair
         .into_inner()
         .filter_map(|pair| match pair.as_rule() {
@@ -337,7 +327,9 @@ fn convert_file(pair: Pair<Rule>) -> Block {
                 span: pair.as_span(),
             })),
             Rule::comment => {
-                comments.push(pair.into_inner().exactly_one().unwrap().as_str());
+                comments
+                    .lines
+                    .push(pair.into_inner().exactly_one().unwrap().as_str());
                 None
             }
             Rule::EOI => None,

@@ -26,7 +26,7 @@ use pest::Span;
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::{
-    ast::{parse, AssignOp, Block, Expr, LValue, Node, PrimaryExpr, Statement},
+    ast::{parse, AssignOp, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
     storage::{Document, DocumentStorage, DocumentVersion},
     util::{parse_simple_literal, LineIndex},
 };
@@ -501,7 +501,7 @@ pub struct AnalyzedVariable<'i, 'p> {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct AnalyzedAssignment<'i, 'p> {
     pub name: &'i str,
-    pub comments: Option<String>,
+    pub comments: Comments<'i>,
     pub statement: &'p Statement<'i>,
     pub document: &'i Document,
     pub variable_span: Span<'i>,
@@ -510,7 +510,7 @@ pub struct AnalyzedAssignment<'i, 'p> {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct AnalyzedTemplate<'i> {
     pub name: &'i str,
-    pub comments: Option<String>,
+    pub comments: Comments<'i>,
     pub document: &'i Document,
     pub header: Span<'i>,
     pub span: Span<'i>,
@@ -840,10 +840,7 @@ impl ThinAnalyzer {
                     if is_exported(identifier.name) {
                         analyzed_block.scope.insert(AnalyzedAssignment {
                             name: identifier.name,
-                            comments: assignment
-                                .comments
-                                .as_ref()
-                                .map(|comments| comments.text.clone()),
+                            comments: assignment.comments.clone(),
                             statement,
                             document,
                             variable_span: identifier.span,
@@ -879,10 +876,7 @@ impl ThinAnalyzer {
                             if is_exported(name) {
                                 analyzed_block.templates.insert(AnalyzedTemplate {
                                     name,
-                                    comments: call
-                                        .comments
-                                        .as_ref()
-                                        .map(|comments| comments.text.clone()),
+                                    comments: call.comments.clone(),
                                     document,
                                     header: call.function.span,
                                     span: call.span,
@@ -915,7 +909,7 @@ impl ThinAnalyzer {
                                     if is_exported(name) {
                                         analyzed_block.scope.insert(AnalyzedAssignment {
                                             name,
-                                            comments: None,
+                                            comments: Comments::default(),
                                             statement,
                                             document,
                                             variable_span: string.span,
@@ -1127,10 +1121,7 @@ impl Analyzer {
                         };
                         events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
                             name: identifier.name,
-                            comments: assignment
-                                .comments
-                                .as_ref()
-                                .map(|comments| comments.text.clone()),
+                            comments: assignment.comments.clone(),
                             statement,
                             document,
                             variable_span: identifier.span,
@@ -1184,10 +1175,7 @@ impl Analyzer {
                                 {
                                     events.push(AnalyzedEvent::Template(AnalyzedTemplate {
                                         name,
-                                        comments: call
-                                            .comments
-                                            .as_ref()
-                                            .map(|comments| comments.text.clone()),
+                                        comments: call.comments.clone(),
                                         document,
                                         header: call.function.span,
                                         span: call.span,
@@ -1243,7 +1231,7 @@ impl Analyzer {
                                             parse_simple_literal(string.raw_value).map(|name| {
                                                 AnalyzedEvent::Assignment(AnalyzedAssignment {
                                                     name,
-                                                    comments: None,
+                                                    comments: Comments::default(),
                                                     statement,
                                                     document,
                                                     variable_span: string.span,

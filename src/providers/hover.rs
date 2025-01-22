@@ -59,10 +59,10 @@ pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<
             "gn".to_string(),
             format!("template(\"{}\") {{ ... }}", template.name),
         )];
-        if let Some(comments) = &template.comments {
+        if !template.comments.is_empty() {
             contents.push(MarkedString::from_language_code(
                 "text".to_string(),
-                comments.clone(),
+                template.comments.to_string(),
             ));
         };
         let position = template
@@ -121,14 +121,12 @@ pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<
             let mut contents = vec![MarkedString::from_language_code("gn".to_string(), snippet)];
 
             if single_assignment {
-                if let Statement::Assignment(Assignment {
-                    comments: Some(comments),
-                    ..
-                }) = first_assignment.statement
+                if let Statement::Assignment(Assignment { comments, .. }) =
+                    first_assignment.statement
                 {
                     contents.push(MarkedString::from_language_code(
                         "text".to_string(),
-                        comments.text.clone(),
+                        comments.to_string(),
                     ));
                 };
             }

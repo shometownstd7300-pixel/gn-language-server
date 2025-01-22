@@ -156,7 +156,7 @@ pub struct Assignment<'i> {
     pub lvalue: LValue<'i>,
     pub op: AssignOp,
     pub rvalue: Box<Expr<'i>>,
-    pub comments: Option<Comments>,
+    pub comments: Comments<'i>,
     pub span: Span<'i>,
 }
 
@@ -179,7 +179,7 @@ pub struct Call<'i> {
     pub function: Identifier<'i>,
     pub args: Vec<Expr<'i>>,
     pub block: Option<Block<'i>>,
-    pub comments: Option<Comments>,
+    pub comments: Comments<'i>,
     pub span: Span<'i>,
 }
 
@@ -617,9 +617,24 @@ impl<'i> Node<'i> for UnmatchedBrace<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct Comments {
-    pub text: String,
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct Comments<'i> {
+    pub lines: Vec<&'i str>,
+}
+
+impl Comments<'_> {
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+}
+
+impl std::fmt::Display for Comments<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for line in &self.lines {
+            writeln!(f, "{}", line)?;
+        }
+        Ok(())
+    }
 }
 
 pub fn parse(input: &str) -> Block {
