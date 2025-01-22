@@ -16,7 +16,7 @@ use itertools::Itertools;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkedString, Url};
 
 use crate::{
-    ast::{Node, Statement},
+    ast::{Assignment, Node, Statement},
     builtins::BUILTINS,
 };
 
@@ -91,6 +91,7 @@ pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<
             .next()
         {
             let single_assignment = variable.assignments.len() == 1;
+
             let snippet = if single_assignment {
                 match first_assignment.statement {
                     Statement::Assignment(assignment) => {
@@ -116,31 +117,45 @@ pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<
             } else {
                 format!("{} = ...", ident.name)
             };
+
+            let mut contents = vec![MarkedString::from_language_code("gn".to_string(), snippet)];
+
+            if single_assignment {
+                if let Statement::Assignment(Assignment {
+                    comments: Some(comments),
+                    ..
+                }) = first_assignment.statement
+                {
+                    contents.push(MarkedString::from_language_code(
+                        "text".to_string(),
+                        comments.text.clone(),
+                    ));
+                };
+            }
+
             let position = first_assignment
                 .document
                 .line_index
                 .position(first_assignment.statement.span().start());
-            docs.push(vec![
-                MarkedString::from_language_code("gn".to_string(), snippet),
-                if single_assignment {
-                    MarkedString::from_markdown(format!(
-                        "Defined at [{}:{}:{}]({}#L{},{})",
-                        current_file
-                            .workspace
-                            .format_path(&first_assignment.document.path),
-                        position.line + 1,
-                        position.character + 1,
-                        Url::from_file_path(&first_assignment.document.path).unwrap(),
-                        position.line + 1,
-                        position.character + 1,
-                    ))
-                } else {
-                    MarkedString::from_markdown(format!(
-                        "Defined and modified in {} locations",
-                        variable.assignments.len()
-                    ))
-                },
-            ]);
+            contents.push(if single_assignment {
+                MarkedString::from_markdown(format!(
+                    "Defined at [{}:{}:{}]({}#L{},{})",
+                    current_file
+                        .workspace
+                        .format_path(&first_assignment.document.path),
+                    position.line + 1,
+                    position.character + 1,
+                    Url::from_file_path(&first_assignment.document.path).unwrap(),
+                    position.line + 1,
+                    position.character + 1,
+                ))
+            } else {
+                MarkedString::from_markdown(format!(
+                    "Defined and modified in {} locations",
+                    variable.assignments.len()
+                ))
+            });
+            docs.push(contents);
         }
     }
 

@@ -501,6 +501,7 @@ pub struct AnalyzedVariable<'i, 'p> {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct AnalyzedAssignment<'i, 'p> {
     pub name: &'i str,
+    pub comments: Option<String>,
     pub statement: &'p Statement<'i>,
     pub document: &'i Document,
     pub variable_span: Span<'i>,
@@ -839,6 +840,10 @@ impl ThinAnalyzer {
                     if is_exported(identifier.name) {
                         analyzed_block.scope.insert(AnalyzedAssignment {
                             name: identifier.name,
+                            comments: assignment
+                                .comments
+                                .as_ref()
+                                .map(|comments| comments.text.clone()),
                             statement,
                             document,
                             variable_span: identifier.span,
@@ -910,6 +915,7 @@ impl ThinAnalyzer {
                                     if is_exported(name) {
                                         analyzed_block.scope.insert(AnalyzedAssignment {
                                             name,
+                                            comments: None,
                                             statement,
                                             document,
                                             variable_span: string.span,
@@ -1121,6 +1127,10 @@ impl Analyzer {
                         };
                         events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
                             name: identifier.name,
+                            comments: assignment
+                                .comments
+                                .as_ref()
+                                .map(|comments| comments.text.clone()),
                             statement,
                             document,
                             variable_span: identifier.span,
@@ -1233,6 +1243,7 @@ impl Analyzer {
                                             parse_simple_literal(string.raw_value).map(|name| {
                                                 AnalyzedEvent::Assignment(AnalyzedAssignment {
                                                     name,
+                                                    comments: None,
                                                     statement,
                                                     document,
                                                     variable_span: string.span,

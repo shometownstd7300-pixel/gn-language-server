@@ -240,7 +240,7 @@ fn convert_assign_op(pair: Pair<Rule>) -> AssignOp {
     }
 }
 
-fn convert_assignment(pair: Pair<Rule>) -> Assignment {
+fn convert_assignment<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Assignment<'i> {
     assert!(matches!(pair.as_rule(), Rule::assignment));
     let span = pair.as_span();
     let (lvalue_pair, assign_op_pair, expr_pair) = pair.into_inner().collect_tuple().unwrap();
@@ -251,6 +251,13 @@ fn convert_assignment(pair: Pair<Rule>) -> Assignment {
         lvalue,
         op: assign_op,
         rvalue: Box::new(expr),
+        comments: if comments.is_empty() {
+            None
+        } else {
+            Some(Comments {
+                text: comments.join("\n"),
+            })
+        },
         span,
     }
 }
@@ -263,6 +270,9 @@ fn convert_call<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Call<'i> {
     let args = convert_expr_list(pairs.next().unwrap());
     let block = pairs.next().map(convert_block);
     Call {
+        function,
+        args,
+        block,
         comments: if comments.is_empty() {
             None
         } else {
@@ -270,9 +280,6 @@ fn convert_call<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Call<'i> {
                 text: comments.join("\n"),
             })
         },
-        function,
-        args,
-        block,
         span,
     }
 }
@@ -307,7 +314,7 @@ fn convert_statement<'i>(pair: Pair<'i, Rule>, comments: Vec<&str>) -> Statement
     assert!(matches!(pair.as_rule(), Rule::statement));
     let pair = pair.into_inner().exactly_one().unwrap();
     match pair.as_rule() {
-        Rule::assignment => Statement::Assignment(convert_assignment(pair)),
+        Rule::assignment => Statement::Assignment(convert_assignment(pair, comments)),
         Rule::call => Statement::Call(convert_call(pair, comments)),
         Rule::condition => Statement::Condition(convert_condition(pair)),
         _ => unreachable!(),

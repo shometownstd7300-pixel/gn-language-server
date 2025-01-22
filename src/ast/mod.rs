@@ -156,6 +156,7 @@ pub struct Assignment<'i> {
     pub lvalue: LValue<'i>,
     pub op: AssignOp,
     pub rvalue: Box<Expr<'i>>,
+    pub comments: Option<Comments>,
     pub span: Span<'i>,
 }
 
@@ -175,10 +176,10 @@ impl<'i> Node<'i> for Assignment<'i> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Call<'i> {
-    pub comments: Option<Comments>,
     pub function: Identifier<'i>,
     pub args: Vec<Expr<'i>>,
     pub block: Option<Block<'i>>,
+    pub comments: Option<Comments>,
     pub span: Span<'i>,
 }
 
