@@ -12,18 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod analyze;
-mod ast;
-mod builtins;
-mod client;
-mod config;
-mod providers;
-mod server;
-mod storage;
-mod testutil;
-mod util;
+#![cfg(test)]
 
-#[tokio::main]
-async fn main() {
-    server::run().await;
+use std::path::{Path, PathBuf};
+
+pub fn testdata(name: impl AsRef<Path>) -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("testdata");
+    path.push(name.as_ref());
+    path
 }

@@ -17,11 +17,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use tower_lsp::{lsp_types::Position, Client};
+use tower_lsp::lsp_types::Position;
 
 use crate::{
     analyze::{AnalyzedFile, Analyzer},
     ast::{Identifier, Node},
+    client::TestableClient,
     storage::DocumentStorage,
 };
 
@@ -39,7 +40,20 @@ pub type RpcResult<T> = tower_lsp::jsonrpc::Result<T>;
 pub struct ProviderContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Mutex<Analyzer>>,
-    pub client: Client,
+    pub client: TestableClient,
+}
+
+impl ProviderContext {
+    #[cfg(test)]
+    pub fn new_for_testing() -> Self {
+        let storage = Arc::new(Mutex::new(DocumentStorage::new()));
+        let analyzer = Arc::new(Mutex::new(Analyzer::new(&storage)));
+        Self {
+            storage,
+            analyzer,
+            client: TestableClient::new_for_testing(),
+        }
+    }
 }
 
 pub fn into_rpc_error(err: std::io::Error) -> tower_lsp::jsonrpc::Error {

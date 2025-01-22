@@ -1371,3 +1371,33 @@ impl Analyzer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::testutil::testdata;
+
+    use super::*;
+
+    #[test]
+    fn test_analyze_smoke() {
+        let storage = Arc::new(Mutex::new(DocumentStorage::new()));
+        let mut analyzer = Analyzer::new(&storage);
+
+        let file = analyzer
+            .analyze(&testdata("workspaces/smoke/BUILD.gn"))
+            .unwrap();
+
+        // No parse error.
+        assert!(file
+            .ast_root
+            .statements
+            .iter()
+            .all(|s| !matches!(s, Statement::Unknown(_) | Statement::UnmatchedBrace(_))));
+
+        // Inspect the top-level scope.
+        let scope = file.scope_at(0);
+        assert!(scope.get("enable_opt").is_some());
+        assert!(scope.get("_lib").is_some());
+        assert!(scope.get("is_linux").is_some());
+    }
+}

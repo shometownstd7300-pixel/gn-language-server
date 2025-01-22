@@ -29,11 +29,12 @@ use tower_lsp::{
         HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
         MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
     },
-    Client, LanguageServer, LspService, Server,
+    LanguageServer, LspService, Server,
 };
 
 use crate::{
     analyze::{find_workspace_root, Analyzer},
+    client::TestableClient,
     config::Configurations,
     providers::{ProviderContext, RpcResult},
     storage::DocumentStorage,
@@ -48,7 +49,7 @@ impl Backend {
     pub fn new(
         storage: &Arc<Mutex<DocumentStorage>>,
         analyzer: &Arc<Mutex<Analyzer>>,
-        client: Client,
+        client: TestableClient,
     ) -> Self {
         Self {
             context: ProviderContext {
@@ -180,8 +181,9 @@ impl LanguageServer for Backend {
 pub async fn run() {
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
     let analyzer = Arc::new(Mutex::new(Analyzer::new(&storage)));
-    let (service, socket) =
-        LspService::new(move |client| Backend::new(&storage, &analyzer, client));
+    let (service, socket) = LspService::new(move |client| {
+        Backend::new(&storage, &analyzer, TestableClient::new(client))
+    });
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();

@@ -172,3 +172,57 @@ pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<
         range: Some(current_file.document.line_index.range(ident.span)),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use tower_lsp::lsp_types::{
+        Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
+    };
+
+    use crate::testutil::testdata;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_hover() {
+        let uri = Url::from_file_path(testdata("workspaces/hover/BUILD.gn")).unwrap();
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position {
+                    line: 17,
+                    character: 0,
+                },
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        };
+
+        let response = hover(&ProviderContext::new_for_testing(), params)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            Some(Hover {
+                contents: HoverContents::Array(vec![
+                    MarkedString::from_language_code("gn".to_string(), "a = 1".to_string()),
+                    MarkedString::from_language_code("text".to_string(), "".to_string()),
+                    MarkedString::from_markdown(format!(
+                        "Defined at [//BUILD.gn:18:1]({}#L18,1)",
+                        uri
+                    )),
+                ]),
+                range: Some(Range {
+                    start: Position {
+                        line: 17,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 17,
+                        character: 1,
+                    },
+                }),
+            })
+        );
+    }
+}
