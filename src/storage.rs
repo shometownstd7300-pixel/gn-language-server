@@ -14,13 +14,16 @@
 
 use std::{
     collections::BTreeMap,
+    io::ErrorKind,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::Arc,
-    time::SystemTime,
+    sync::{Arc, RwLock},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::util::LineIndex;
+
+const CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DocumentVersion {
@@ -29,11 +32,11 @@ pub enum DocumentVersion {
     Missing,
 }
 
-#[derive(Clone)]
 pub struct Document {
     pub path: PathBuf,
     pub data: Pin<String>,
     pub version: DocumentVersion,
+    pub last_checked: RwLock<Instant>,
     pub line_index: LineIndex<'static>,
 }
 
@@ -47,12 +50,26 @@ impl Document {
             path: path.to_path_buf(),
             data,
             version,
+            last_checked: RwLock::new(Instant::now()),
             line_index,
         }
     }
 
     pub fn empty(path: &Path) -> Self {
         Self::new(path, String::new(), DocumentVersion::Missing)
+    }
+
+    pub fn need_check(&self) -> bool {
+        self.last_checked.read().unwrap().elapsed() >= CHECK_INTERVAL
+    }
+
+    pub fn will_check(&self) -> bool {
+        if self.need_check() {
+            *self.last_checked.write().unwrap() = Instant::now();
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -88,7 +105,10 @@ impl DocumentStorage {
             return Ok(doc.version);
         }
 
-        let metadata = fs_err::metadata(path)?;
+        let metadata = match fs_err::metadata(path) {
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(DocumentVersion::Missing),
+            other => other?,
+        };
         let modified = metadata.modified()?;
         Ok(DocumentVersion::OnDisk { modified })
     }
@@ -97,8 +117,9 @@ impl DocumentStorage {
         if let Some(doc) = self.memory_docs.get(path) {
             return Ok(doc.clone());
         }
-        let data = fs_err::read_to_string(path)?;
+        // Read the version first to be pesimistic about file changes.
         let version = self.read_version(path)?;
+        let data = fs_err::read_to_string(path)?;
         Ok(Arc::pin(Document::new(path, data, version)))
     }
 

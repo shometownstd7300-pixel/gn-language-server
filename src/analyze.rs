@@ -167,9 +167,11 @@ pub struct AnalyzedFile {
 
 impl AnalyzedFile {
     pub fn is_fresh(&self, storage: &DocumentStorage) -> std::io::Result<bool> {
-        let version = storage.read_version(&self.document.path)?;
-        if version != self.document.version {
-            return Ok(false);
+        if self.document.will_check() {
+            let version = storage.read_version(&self.document.path)?;
+            if version != self.document.version {
+                return Ok(false);
+            }
         }
         for dep in &self.deps {
             if !dep.is_fresh(storage)? {
@@ -221,9 +223,11 @@ impl ThinAnalyzedFile {
     }
 
     pub fn is_fresh(&self, storage: &DocumentStorage) -> std::io::Result<bool> {
-        let version = storage.read_version(&self.document.path)?;
-        if version != self.document.version {
-            return Ok(false);
+        if self.document.will_check() {
+            let version = storage.read_version(&self.document.path)?;
+            if version != self.document.version {
+                return Ok(false);
+            }
         }
         for dep in &self.deps {
             if !dep.is_fresh(storage)? {
