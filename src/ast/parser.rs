@@ -67,16 +67,16 @@ fn convert_string(pair: Pair<Rule>) -> StringLiteral {
         .into_inner()
         .map(|pair| match pair.as_rule() {
             Rule::embedded_expr => convert_expr(pair.into_inner().exactly_one().unwrap()),
-            Rule::embedded_identifier => {
-                Expr::Primary(PrimaryExpr::Identifier(convert_identifier(
+            Rule::embedded_identifier => Expr::Primary(Box::new(PrimaryExpr::Identifier(
+                Box::new(convert_identifier(
                     pair.into_inner()
                         .exactly_one()
                         .unwrap()
                         .into_inner()
                         .exactly_one()
                         .unwrap(),
-                )))
-            }
+                )),
+            ))),
             _ => unreachable!(),
         })
         .collect();
@@ -129,10 +129,10 @@ fn convert_block(pair: Pair<Rule>) -> Block {
         .into_inner()
         .filter_map(|pair| match pair.as_rule() {
             Rule::statement => Some(convert_statement(pair, std::mem::take(&mut comments))),
-            Rule::error => Some(Statement::Unknown(UnknownStatement {
+            Rule::error => Some(Statement::Unknown(Box::new(UnknownStatement {
                 text: pair.as_str(),
                 span: pair.as_span(),
-            })),
+            }))),
             Rule::comment => {
                 comments
                     .lines
@@ -147,15 +147,15 @@ fn convert_block(pair: Pair<Rule>) -> Block {
 
 fn convert_primary(pair: Pair<Rule>) -> PrimaryExpr {
     match pair.as_rule() {
-        Rule::identifier => PrimaryExpr::Identifier(convert_identifier(pair)),
-        Rule::integer => PrimaryExpr::Integer(convert_integer(pair)),
-        Rule::string => PrimaryExpr::String(convert_string(pair)),
-        Rule::call => PrimaryExpr::Call(convert_call(pair, Comments::default())),
-        Rule::array_access => PrimaryExpr::ArrayAccess(convert_array_access(pair)),
-        Rule::scope_access => PrimaryExpr::ScopeAccess(convert_scope_access(pair)),
-        Rule::block => PrimaryExpr::Block(convert_block(pair)),
-        Rule::paren_expr => PrimaryExpr::ParenExpr(convert_paren_expr(pair)),
-        Rule::list => PrimaryExpr::List(convert_list(pair)),
+        Rule::identifier => PrimaryExpr::Identifier(Box::new(convert_identifier(pair))),
+        Rule::integer => PrimaryExpr::Integer(Box::new(convert_integer(pair))),
+        Rule::string => PrimaryExpr::String(Box::new(convert_string(pair))),
+        Rule::call => PrimaryExpr::Call(Box::new(convert_call(pair, Comments::default()))),
+        Rule::array_access => PrimaryExpr::ArrayAccess(Box::new(convert_array_access(pair))),
+        Rule::scope_access => PrimaryExpr::ScopeAccess(Box::new(convert_scope_access(pair))),
+        Rule::block => PrimaryExpr::Block(Box::new(convert_block(pair))),
+        Rule::paren_expr => PrimaryExpr::ParenExpr(Box::new(convert_paren_expr(pair))),
+        Rule::list => PrimaryExpr::List(Box::new(convert_list(pair))),
         _ => unreachable!(),
     }
 }
@@ -176,7 +176,7 @@ fn convert_expr(pair: Pair<Rule>) -> Expr {
         .op(Op::infix(Rule::and, Assoc::Left))
         .op(Op::infix(Rule::or, Assoc::Left));
     pratt_parser
-        .map_primary(|pair| Expr::Primary(convert_primary(pair)))
+        .map_primary(|pair| Expr::Primary(Box::new(convert_primary(pair))))
         .map_prefix(|op, rhs| {
             let span = Span::new(
                 op.as_span().get_input(),
@@ -185,23 +185,23 @@ fn convert_expr(pair: Pair<Rule>) -> Expr {
             )
             .unwrap();
             match op.as_rule() {
-                Rule::not => Expr::Unary(UnaryExpr {
+                Rule::not => Expr::Unary(Box::new(UnaryExpr {
                     op: UnaryOp::Not,
                     expr: Box::new(rhs),
                     span,
-                }),
+                })),
                 _ => unreachable!(),
             }
         })
         .map_infix(|lhs, op, rhs| {
             let span =
                 Span::new(lhs.span().get_input(), lhs.span().start(), rhs.span().end()).unwrap();
-            Expr::Binary(BinaryExpr {
+            Expr::Binary(Box::new(BinaryExpr {
                 lhs: Box::new(lhs),
                 op: rule_to_binary_op(op.as_rule()),
                 rhs: Box::new(rhs),
                 span,
-            })
+            }))
         })
         .parse(pairs)
 }
@@ -225,9 +225,9 @@ fn convert_lvalue(pair: Pair<Rule>) -> LValue {
     assert!(matches!(pair.as_rule(), Rule::lvalue));
     let pair = pair.into_inner().exactly_one().unwrap();
     match pair.as_rule() {
-        Rule::identifier => LValue::Identifier(convert_identifier(pair)),
-        Rule::array_access => LValue::ArrayAccess(convert_array_access(pair)),
-        Rule::scope_access => LValue::ScopeAccess(convert_scope_access(pair)),
+        Rule::identifier => LValue::Identifier(Box::new(convert_identifier(pair))),
+        Rule::array_access => LValue::ArrayAccess(Box::new(convert_array_access(pair))),
+        Rule::scope_access => LValue::ScopeAccess(Box::new(convert_scope_access(pair))),
         _ => unreachable!(),
     }
 }
@@ -304,9 +304,9 @@ fn convert_statement<'i>(pair: Pair<'i, Rule>, comments: Comments<'i>) -> Statem
     assert!(matches!(pair.as_rule(), Rule::statement));
     let pair = pair.into_inner().exactly_one().unwrap();
     match pair.as_rule() {
-        Rule::assignment => Statement::Assignment(convert_assignment(pair, comments)),
-        Rule::call => Statement::Call(convert_call(pair, comments)),
-        Rule::condition => Statement::Condition(convert_condition(pair)),
+        Rule::assignment => Statement::Assignment(Box::new(convert_assignment(pair, comments))),
+        Rule::call => Statement::Call(Box::new(convert_call(pair, comments))),
+        Rule::condition => Statement::Condition(Box::new(convert_condition(pair))),
         _ => unreachable!(),
     }
 }
@@ -319,13 +319,13 @@ fn convert_file(pair: Pair<Rule>) -> Block {
         .into_inner()
         .filter_map(|pair| match pair.as_rule() {
             Rule::statement => Some(convert_statement(pair, std::mem::take(&mut comments))),
-            Rule::error => Some(Statement::Unknown(UnknownStatement {
+            Rule::error => Some(Statement::Unknown(Box::new(UnknownStatement {
                 text: pair.as_str(),
                 span: pair.as_span(),
-            })),
-            Rule::unmatched_brace => Some(Statement::UnmatchedBrace(UnmatchedBrace {
+            }))),
+            Rule::unmatched_brace => Some(Statement::UnmatchedBrace(Box::new(UnmatchedBrace {
                 span: pair.as_span(),
-            })),
+            }))),
             Rule::comment => {
                 comments
                     .lines

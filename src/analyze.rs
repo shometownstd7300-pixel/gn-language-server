@@ -1323,7 +1323,7 @@ impl Analyzer {
         deps: &mut Vec<Arc<ThinAnalyzedFile>>,
     ) -> std::io::Result<Vec<AnalyzedEvent<'i, 'p>>> {
         match expr {
-            Expr::Primary(primary_expr) => match primary_expr {
+            Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
                     let analyzed_root = self.analyze_block(block, workspace, document, deps)?;
                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])

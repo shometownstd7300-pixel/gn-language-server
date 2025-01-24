@@ -85,11 +85,11 @@ impl<'n, T> Iterator for FilterWalk<'_, 'n, T> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Statement<'i> {
-    Assignment(Assignment<'i>),
-    Call(Call<'i>),
-    Condition(Condition<'i>),
-    Unknown(UnknownStatement<'i>),
-    UnmatchedBrace(UnmatchedBrace<'i>),
+    Assignment(Box<Assignment<'i>>),
+    Call(Box<Call<'i>>),
+    Condition(Box<Condition<'i>>),
+    Unknown(Box<UnknownStatement<'i>>),
+    UnmatchedBrace(Box<UnmatchedBrace<'i>>),
 }
 
 impl<'i> Node<'i> for Statement<'i> {
@@ -99,11 +99,11 @@ impl<'i> Node<'i> for Statement<'i> {
 
     fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
-            Statement::Assignment(assignment) => vec![assignment],
-            Statement::Call(call) => vec![call],
-            Statement::Condition(condition) => vec![condition],
-            Statement::Unknown(unknown_statement) => vec![unknown_statement],
-            Statement::UnmatchedBrace(unmatched_brace) => vec![unmatched_brace],
+            Statement::Assignment(assignment) => vec![assignment.as_node()],
+            Statement::Call(call) => vec![call.as_node()],
+            Statement::Condition(condition) => vec![condition.as_node()],
+            Statement::Unknown(unknown_statement) => vec![unknown_statement.as_node()],
+            Statement::UnmatchedBrace(unmatched_brace) => vec![unmatched_brace.as_node()],
         }
     }
 
@@ -124,9 +124,9 @@ impl<'i> Node<'i> for Statement<'i> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum LValue<'i> {
-    Identifier(Identifier<'i>),
-    ArrayAccess(ArrayAccess<'i>),
-    ScopeAccess(ScopeAccess<'i>),
+    Identifier(Box<Identifier<'i>>),
+    ArrayAccess(Box<ArrayAccess<'i>>),
+    ScopeAccess(Box<ScopeAccess<'i>>),
 }
 
 impl<'i> Node<'i> for LValue<'i> {
@@ -136,9 +136,9 @@ impl<'i> Node<'i> for LValue<'i> {
 
     fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
-            LValue::Identifier(identifier) => vec![identifier],
-            LValue::ArrayAccess(array_access) => vec![array_access],
-            LValue::ScopeAccess(scope_access) => vec![scope_access],
+            LValue::Identifier(identifier) => vec![identifier.as_node()],
+            LValue::ArrayAccess(array_access) => vec![array_access.as_node()],
+            LValue::ScopeAccess(scope_access) => vec![scope_access.as_node()],
         }
     }
 
@@ -297,22 +297,29 @@ impl<'i> Node<'i> for ScopeAccess<'i> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Expr<'i> {
-    Primary(PrimaryExpr<'i>),
-    Unary(UnaryExpr<'i>),
-    Binary(BinaryExpr<'i>),
+    Primary(Box<PrimaryExpr<'i>>),
+    Unary(Box<UnaryExpr<'i>>),
+    Binary(Box<BinaryExpr<'i>>),
 }
 
 impl<'i> Expr<'i> {
-    pub fn as_primary_string(&self) -> Option<&StringLiteral<'i>> {
+    pub fn as_primary(&self) -> Option<&PrimaryExpr<'i>> {
         match self {
-            Expr::Primary(PrimaryExpr::String(string)) => Some(string),
+            Expr::Primary(primary_expr) => Some(primary_expr),
+            _ => None,
+        }
+    }
+
+    pub fn as_primary_string(&self) -> Option<&StringLiteral<'i>> {
+        match self.as_primary()? {
+            PrimaryExpr::String(string) => Some(string),
             _ => None,
         }
     }
 
     pub fn as_primary_list(&self) -> Option<&ListLiteral<'i>> {
-        match self {
-            Expr::Primary(PrimaryExpr::List(list)) => Some(list),
+        match self.as_primary()? {
+            PrimaryExpr::List(list) => Some(list),
             _ => None,
         }
     }
@@ -325,9 +332,9 @@ impl<'i> Node<'i> for Expr<'i> {
 
     fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
-            Expr::Primary(primary_expr) => vec![primary_expr],
-            Expr::Unary(unary_expr) => vec![unary_expr],
-            Expr::Binary(binary_expr) => vec![binary_expr],
+            Expr::Primary(primary_expr) => vec![primary_expr.as_node()],
+            Expr::Unary(unary_expr) => vec![unary_expr.as_node()],
+            Expr::Binary(binary_expr) => vec![binary_expr.as_node()],
         }
     }
 
@@ -342,15 +349,15 @@ impl<'i> Node<'i> for Expr<'i> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum PrimaryExpr<'i> {
-    Identifier(Identifier<'i>),
-    Integer(IntegerLiteral<'i>),
-    String(StringLiteral<'i>),
-    Call(Call<'i>),
-    ArrayAccess(ArrayAccess<'i>),
-    ScopeAccess(ScopeAccess<'i>),
-    Block(Block<'i>),
-    ParenExpr(ParenExpr<'i>),
-    List(ListLiteral<'i>),
+    Identifier(Box<Identifier<'i>>),
+    Integer(Box<IntegerLiteral<'i>>),
+    String(Box<StringLiteral<'i>>),
+    Call(Box<Call<'i>>),
+    ArrayAccess(Box<ArrayAccess<'i>>),
+    ScopeAccess(Box<ScopeAccess<'i>>),
+    Block(Box<Block<'i>>),
+    ParenExpr(Box<ParenExpr<'i>>),
+    List(Box<ListLiteral<'i>>),
 }
 
 impl<'i> Node<'i> for PrimaryExpr<'i> {
@@ -360,15 +367,15 @@ impl<'i> Node<'i> for PrimaryExpr<'i> {
 
     fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
-            PrimaryExpr::Identifier(identifier) => vec![identifier],
-            PrimaryExpr::Integer(integer) => vec![integer],
-            PrimaryExpr::String(string) => vec![string],
-            PrimaryExpr::Call(call) => vec![call],
-            PrimaryExpr::ArrayAccess(array_access) => vec![array_access],
-            PrimaryExpr::ScopeAccess(scope_access) => vec![scope_access],
-            PrimaryExpr::Block(block) => vec![block],
-            PrimaryExpr::ParenExpr(paren_expr) => vec![paren_expr],
-            PrimaryExpr::List(list) => vec![list],
+            PrimaryExpr::Identifier(identifier) => vec![identifier.as_node()],
+            PrimaryExpr::Integer(integer) => vec![integer.as_node()],
+            PrimaryExpr::String(string) => vec![string.as_node()],
+            PrimaryExpr::Call(call) => vec![call.as_node()],
+            PrimaryExpr::ArrayAccess(array_access) => vec![array_access.as_node()],
+            PrimaryExpr::ScopeAccess(scope_access) => vec![scope_access.as_node()],
+            PrimaryExpr::Block(block) => vec![block.as_node()],
+            PrimaryExpr::ParenExpr(paren_expr) => vec![paren_expr.as_node()],
+            PrimaryExpr::List(list) => vec![list.as_node()],
         }
     }
 

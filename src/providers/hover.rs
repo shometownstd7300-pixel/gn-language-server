@@ -16,7 +16,7 @@ use itertools::Itertools;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkedString, Url};
 
 use crate::{
-    ast::{Assignment, Node, Statement},
+    ast::{Node, Statement},
     builtins::BUILTINS,
 };
 
@@ -121,12 +121,10 @@ pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<
             let mut contents = vec![MarkedString::from_language_code("gn".to_string(), snippet)];
 
             if single_assignment {
-                if let Statement::Assignment(Assignment { comments, .. }) =
-                    first_assignment.statement
-                {
+                if let Statement::Assignment(assignment) = first_assignment.statement {
                     contents.push(MarkedString::from_language_code(
                         "text".to_string(),
-                        comments.to_string(),
+                        assignment.comments.to_string(),
                     ));
                 };
             }
