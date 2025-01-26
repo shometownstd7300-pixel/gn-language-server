@@ -48,6 +48,16 @@
           "type": "boolean",
           "default": false,
           "description": "Enables background indexing"
+        },
+        "gn.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the language server communication"
         }
       }
     }
