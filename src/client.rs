@@ -14,10 +14,10 @@
 
 use std::fmt::Display;
 
-use serde_json::Value;
+use itertools::Itertools;
 use tower_lsp::lsp_types::{ConfigurationItem, MessageType};
 
-use crate::providers::RpcResult;
+use crate::config::Configurations;
 
 #[derive(Clone)]
 pub struct TestableClient {
@@ -42,11 +42,25 @@ impl TestableClient {
         }
     }
 
-    pub async fn configuration(&self, items: Vec<ConfigurationItem>) -> RpcResult<Vec<Value>> {
-        if let Some(client) = &self.client {
-            client.configuration(items).await
-        } else {
-            Ok(Vec::new())
-        }
+    pub async fn configurations(&self) -> Configurations {
+        let Some(client) = &self.client else {
+            return Configurations::default();
+        };
+
+        let Ok(values) = client
+            .configuration(vec![ConfigurationItem {
+                scope_uri: None,
+                section: Some("gn".to_string()),
+            }])
+            .await
+        else {
+            return Configurations::default();
+        };
+
+        let Ok(value) = values.into_iter().exactly_one() else {
+            return Configurations::default();
+        };
+
+        serde_json::from_value(value).unwrap_or_default()
     }
 }

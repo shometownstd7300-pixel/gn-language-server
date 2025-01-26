@@ -18,16 +18,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use itertools::Itertools;
 use tokio::spawn;
 use tower_lsp::{
     lsp_types::{
-        CompletionOptions, CompletionParams, CompletionResponse, ConfigurationItem,
-        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-        DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams,
-        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-        HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-        MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions,
+        DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+        GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
+        InitializeResult, InitializedParams, MessageType, OneOf, ServerCapabilities,
+        TextDocumentSyncCapability, TextDocumentSyncKind,
     },
     LanguageServer, LspService, Server,
 };
@@ -35,7 +34,6 @@ use tower_lsp::{
 use crate::{
     analyze::{find_workspace_root, Analyzer},
     client::TestableClient,
-    config::Configurations,
     providers::{ProviderContext, RpcResult},
     storage::DocumentStorage,
 };
@@ -59,26 +57,6 @@ impl Backend {
             },
             indexed_workspaces: Mutex::new(HashSet::new()),
         }
-    }
-
-    async fn get_configurations(&self) -> Configurations {
-        let Ok(values) = self
-            .context
-            .client
-            .configuration(vec![ConfigurationItem {
-                scope_uri: None,
-                section: Some("gn".to_string()),
-            }])
-            .await
-        else {
-            return Configurations::default();
-        };
-
-        let Ok(value) = values.into_iter().exactly_one() else {
-            return Configurations::default();
-        };
-
-        serde_json::from_value(value).unwrap_or_default()
     }
 }
 
@@ -116,7 +94,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let configurations = self.get_configurations().await;
+        let configurations = self.context.client.configurations().await;
         if configurations.experimental.background_indexing {
             if let Ok(path) = params.text_document.uri.to_file_path() {
                 if let Ok(workspace_root) = find_workspace_root(&path) {
