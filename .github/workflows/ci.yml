@@ -29,6 +29,20 @@ env:
 
 jobs:
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: go install github.com/google/addlicense@latest
+      - run: addlicense -check .
+      - run: cargo clippy
+      - run: npm ci
+        working-directory: vscode-gn
+      - run: npm run lint
+        working-directory: vscode-gn
+
   language-server:
     strategy:
       fail-fast: false
@@ -44,6 +58,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CARGO_BUILD_TARGET: ${{ matrix.rust_target }}
+    needs: lint
     steps:
     - uses: actions/checkout@v4
     - run: sudo apt-get install musl-tools
@@ -77,6 +92,7 @@ jobs:
     env:
       CARGO_BUILD_TARGET: ${{ matrix.rust_target }}
     name: vscode-extension (${{ matrix.vscode_target }})
+    needs: lint
     steps:
     - uses: actions/checkout@v4
     - run: sudo apt-get install musl-tools
