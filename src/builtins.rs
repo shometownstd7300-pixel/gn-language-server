@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub const IMPORT: &str = "import";
+pub const TEMPLATE: &str = "template";
+pub const DECLARE_ARGS: &str = "declare_args";
+pub const FOREACH: &str = "foreach";
+pub const SET_DEFAULTS: &str = "set_defaults";
+pub const FORWARD_VARIABLES_FROM: &str = "forward_variables_from";
+
 pub struct BuiltinSymbol {
     pub name: &'static str,
     pub doc: &'static str,

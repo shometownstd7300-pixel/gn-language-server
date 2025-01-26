@@ -29,6 +29,7 @@ use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::{
     ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
+    builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     storage::{Document, DocumentStorage, DocumentVersion},
     util::{parse_simple_literal, LineIndex},
 };
@@ -377,7 +378,7 @@ impl Analyzer {
                     }
                     Statement::Call(call) => {
                         match call.function.name {
-                            "import" => {
+                            IMPORT => {
                                 if let Some(name) = call
                                     .args
                                     .iter()
@@ -405,7 +406,7 @@ impl Analyzer {
                                     Ok(Vec::new())
                                 }
                             }
-                            "template" => {
+                            TEMPLATE => {
                                 let mut events = Vec::new();
                                 if let Some(name) = call
                                     .args
@@ -430,7 +431,7 @@ impl Analyzer {
                                 }
                                 Ok(events)
                             }
-                            "declare_args" => {
+                            DECLARE_ARGS => {
                                 if let Some(block) = &call.block {
                                     let analyzed_root =
                                         self.analyze_block(block, workspace, document, deps)?;
@@ -439,14 +440,14 @@ impl Analyzer {
                                     Ok(Vec::new())
                                 }
                             }
-                            "foreach" => {
+                            FOREACH => {
                                 if let Some(block) = &call.block {
                                     Ok(self.analyze_block(block, workspace, document, deps)?.events)
                                 } else {
                                     Ok(Vec::new())
                                 }
                             }
-                            "set_defaults" => {
+                            SET_DEFAULTS => {
                                 if let Some(block) = &call.block {
                                     let analyzed_root =
                                         self.analyze_block(block, workspace, document, deps)?;
@@ -455,7 +456,7 @@ impl Analyzer {
                                     Ok(Vec::new())
                                 }
                             }
-                            "forward_variables_from" => {
+                            FORWARD_VARIABLES_FROM => {
                                 if let Some(strings) = call
                                     .args
                                     .get(1)

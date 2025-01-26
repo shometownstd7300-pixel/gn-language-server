@@ -29,6 +29,7 @@ use crate::{
         ShallowAnalyzedFile, WorkspaceContext,
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},
+    builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     storage::{Document, DocumentStorage},
     util::parse_simple_literal,
 };
@@ -187,7 +188,7 @@ impl ShallowAnalyzer {
                     }
                 }
                 Statement::Call(call) => match call.function.name {
-                    "import" => {
+                    IMPORT => {
                         if let Some(name) = call
                             .args
                             .iter()
@@ -203,7 +204,7 @@ impl ShallowAnalyzer {
                             deps.push(file);
                         }
                     }
-                    "template" => {
+                    TEMPLATE => {
                         if let Some(name) = call
                             .args
                             .iter()
@@ -223,15 +224,15 @@ impl ShallowAnalyzer {
                             }
                         }
                     }
-                    "declare_args" | "foreach" => {
+                    DECLARE_ARGS | FOREACH => {
                         if let Some(block) = &call.block {
                             analyzed_block.merge(
                                 &self.analyze_block(block, workspace, document, deps, visiting)?,
                             );
                         }
                     }
-                    "set_defaults" => {}
-                    "forward_variables_from" => {
+                    SET_DEFAULTS => {}
+                    FORWARD_VARIABLES_FROM => {
                         if let Some(strings) = call
                             .args
                             .get(1)
