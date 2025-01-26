@@ -999,7 +999,7 @@ impl Analyzer {
                 "Path must be absolute",
             ));
         }
-        self.analyze_cached(&path)
+        self.analyze_cached(path)
     }
 
     fn workspace_cache_for(&mut self, path: &Path) -> std::io::Result<&mut WorkspaceCache> {
