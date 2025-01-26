@@ -993,7 +993,12 @@ impl Analyzer {
     }
 
     pub fn analyze(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
-        let path = path.canonicalize()?;
+        if !path.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Path must be absolute",
+            ));
+        }
         self.analyze_cached(&path)
     }
 
