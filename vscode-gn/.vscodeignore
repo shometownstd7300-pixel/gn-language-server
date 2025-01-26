@@ -1,13 +1,10 @@
 .gitignore
-.vscode-test.mjs
-.vscode-test/**
 .vscode/**
 Cargo.lock
 Cargo.toml
 eslint.config.mjs
 gn-lsp/**
 node_modules/**
-out/**
 src/**
 tsconfig.json
 webpack.config.js
