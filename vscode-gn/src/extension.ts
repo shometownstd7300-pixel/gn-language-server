@@ -20,9 +20,62 @@ import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind } f
 
 const EXECUTABLE_SUFFIX: string = process.platform === 'win32' ? '.exe' : '';
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
-	const output = vscode.window.createOutputChannel('GN');
+function ancestors(uri: vscode.Uri): vscode.Uri[] {
+	const ancestors = [];
+	let current = uri;
+	while (current.path !== '/') {
+		ancestors.push(current);
+		current = current.with({path: path.dirname(current.path)});
+	}
+	return ancestors;
+}
 
+async function isInGnWorkspace(uri: vscode.Uri): Promise<boolean> {
+	for (const dirUri of ancestors(uri).slice(1)) {
+		for (const name of ['.gn', 'BUILD.gn']) {
+			const candidateUri = dirUri.with({path: path.join(dirUri.path, name)});
+			try {
+				if (await vscode.workspace.fs.stat(candidateUri)) {
+					return true;
+				}
+			} catch {}
+		}
+	}
+	return false;
+}
+
+async function updateActiveEditorContext(): Promise<void> {
+	const uri = vscode.window.activeTextEditor?.document?.uri;
+	const inGnWorkspace = uri ? await isInGnWorkspace(uri) : false;
+	vscode.commands.executeCommand('setContext', 'gn.inGnWorkspace', inGnWorkspace);
+}
+
+async function openBuildFile(): Promise<void> {
+	const startUri = vscode.window.activeTextEditor?.document?.uri;
+	if (!startUri) {
+		void vscode.window.showErrorMessage('No open editor.');
+		return;
+	}
+
+	for (const dirUri of ancestors(startUri).slice(1)) {
+		const candidateUri = dirUri.with({path: path.join(dirUri.path, 'BUILD.gn')});
+		try {
+			if (await vscode.workspace.fs.stat(candidateUri)) {
+				vscode.window.showTextDocument(candidateUri);
+				return;
+			}
+		} catch {}
+		try {
+			if (await vscode.workspace.fs.stat(dirUri.with({path: path.join(dirUri.path, '.gn')}))) {
+				break;
+			}
+		} catch {}
+	}
+
+	void vscode.window.showErrorMessage('BUILD.gn not found in the ancestor directories.');
+}
+
+async function startLanguageServer(context: vscode.ExtensionContext, output: vscode.OutputChannel): Promise<void> {
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
 			{'scheme': 'file', 'pattern': '**/*.gn'},
@@ -60,5 +113,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	await client.start();
 }
 
-export async function deactivate(): Promise<void> {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	const output = vscode.window.createOutputChannel('GN');
+	context.subscriptions.push(output);
+
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(updateActiveEditorContext));
+	await updateActiveEditorContext();
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('gn.openBuildFile', openBuildFile)
+	);
+
+	await startLanguageServer(context, output);
 }

@@ -15,8 +15,28 @@
     "Programming Languages"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "workspaceContains:**/.gn",
+    "workspaceContains:**/BUILD.gn"
+  ],
   "contributes": {
+    "commands": [
+      {
+        "command": "gn.openBuildFile",
+        "title": "Open the nearest BUILD.gn",
+        "category": "GN",
+        "icon": "$(go-to-file)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "gn.openBuildFile",
+          "group": "navigation",
+          "when": "gn.inGnWorkspace"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "gn",
