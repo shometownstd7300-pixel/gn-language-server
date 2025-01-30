@@ -30,15 +30,21 @@ function ancestors(uri: vscode.Uri): vscode.Uri[] {
 	return ancestors;
 }
 
+async function statNoThrow(uri: vscode.Uri): Promise<vscode.FileStat | undefined> {
+	try {
+		return await vscode.workspace.fs.stat(uri);
+	} catch {
+		return undefined;
+	}
+}
+
 async function isInGnWorkspace(uri: vscode.Uri): Promise<boolean> {
 	for (const dirUri of ancestors(uri).slice(1)) {
 		for (const name of ['.gn', 'BUILD.gn']) {
 			const candidateUri = dirUri.with({path: path.join(dirUri.path, name)});
-			try {
-				if (await vscode.workspace.fs.stat(candidateUri)) {
-					return true;
-				}
-			} catch {}
+			if (await statNoThrow(candidateUri)) {
+				return true;
+			}
 		}
 	}
 	return false;
@@ -57,19 +63,25 @@ async function openBuildFile(): Promise<void> {
 		return;
 	}
 
-	for (const dirUri of ancestors(startUri).slice(1)) {
-		const candidateUri = dirUri.with({path: path.join(dirUri.path, 'BUILD.gn')});
-		try {
-			if (await vscode.workspace.fs.stat(candidateUri)) {
-				vscode.window.showTextDocument(candidateUri);
-				return;
-			}
-		} catch {}
-		try {
-			if (await vscode.workspace.fs.stat(dirUri.with({path: path.join(dirUri.path, '.gn')}))) {
-				break;
-			}
-		} catch {}
+	const isGnFile = startUri.path.endsWith('.gn') || startUri.path.endsWith('.gni');
+
+	if (isGnFile) {
+		const dotGnUri = startUri.with({path: path.join(path.dirname(startUri.path), '.gn')});
+		if (await statNoThrow(dotGnUri)) {
+			void vscode.window.showInformationMessage('This file is in the top-level directory.');
+			return;
+		}
+	}
+
+	for (const dirUri of ancestors(startUri).slice(isGnFile ? 2 : 1)) {
+		const buildUri = dirUri.with({path: path.join(dirUri.path, 'BUILD.gn')});
+		if (await statNoThrow(buildUri)) {
+			vscode.window.showTextDocument(buildUri);
+			return;
+		}
+		if (await statNoThrow(dirUri.with({path: path.join(dirUri.path, '.gn')}))) {
+			break;
+		}
 	}
 
 	void vscode.window.showErrorMessage('BUILD.gn not found in the ancestor directories.');
