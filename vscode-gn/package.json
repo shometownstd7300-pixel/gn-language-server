@@ -87,8 +87,8 @@
     "build-extension": "webpack",
     "build-server": "cargo build --release && bash -c 'cp ../target/${CARGO_BUILD_TARGET:-.}/release/gn-language-server${APPDATA:+.exe} dist/'",
     "package": "vsce package",
-    "lint": "eslint src",
-    "pretest": "npm run build && npm run lint",
+    "lint": "gts lint",
+    "fix": "gts fix",
     "vscode:prepublish": "npm ci && npm run build"
   },
   "dependencies": {
@@ -101,7 +101,8 @@
     "@typescript-eslint/eslint-plugin": "^8.17.0",
     "@typescript-eslint/parser": "^8.17.0",
     "@vscode/vsce": "^3.2.1",
-    "eslint": "^9.16.0",
+    "eslint": "^8.57.1",
+    "gts": "^5.3.1",
     "ts-loader": "^9.5.1",
     "typescript": "^5.7.2",
     "webpack": "^5.95.0",
