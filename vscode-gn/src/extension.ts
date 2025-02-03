@@ -28,9 +28,13 @@ const EXECUTABLE_SUFFIX: string = process.platform === 'win32' ? '.exe' : '';
 function ancestors(uri: vscode.Uri): vscode.Uri[] {
   const ancestors = [];
   let current = uri;
-  while (current.path !== '/') {
+  while (true) {
     ancestors.push(current);
-    current = current.with({path: path.dirname(current.path)});
+    const dir = path.dirname(current.path);
+    if (dir === current.path) {
+      break;
+    }
+    current = current.with({path: dir});
   }
   return ancestors;
 }
