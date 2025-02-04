@@ -21,7 +21,6 @@ use std::{
 };
 
 use either::Either;
-use itertools::Itertools;
 
 use crate::{
     analyze::base::{
@@ -190,10 +189,7 @@ impl ShallowAnalyzer {
                 Statement::Call(call) => match call.function.name {
                     IMPORT => {
                         if let Some(name) = call
-                            .args
-                            .iter()
-                            .exactly_one()
-                            .ok()
+                            .only_arg()
                             .and_then(|expr| expr.as_primary_string())
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
@@ -206,10 +202,7 @@ impl ShallowAnalyzer {
                     }
                     TEMPLATE => {
                         if let Some(name) = call
-                            .args
-                            .iter()
-                            .exactly_one()
-                            .ok()
+                            .only_arg()
                             .and_then(|expr| expr.as_primary_string())
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
@@ -261,10 +254,7 @@ impl ShallowAnalyzer {
                     }
                     _ => {
                         if let Some(name) = call
-                            .args
-                            .iter()
-                            .exactly_one()
-                            .ok()
+                            .only_arg()
                             .and_then(|expr| expr.as_primary_string())
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {

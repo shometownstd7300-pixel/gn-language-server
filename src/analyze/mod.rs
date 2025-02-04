@@ -22,7 +22,6 @@ use std::{
 
 use dotgn::evaluate_dot_gn;
 use either::Either;
-use itertools::Itertools;
 use pest::Span;
 use shallow::ShallowAnalyzer;
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
@@ -379,10 +378,7 @@ impl Analyzer {
                         match call.function.name {
                             IMPORT => {
                                 if let Some(name) = call
-                                    .args
-                                    .iter()
-                                    .exactly_one()
-                                    .ok()
+                                    .only_arg()
                                     .and_then(|expr| expr.as_primary_string())
                                     .and_then(|s| parse_simple_literal(s.raw_value))
                                 {
@@ -408,10 +404,7 @@ impl Analyzer {
                             TEMPLATE => {
                                 let mut events = Vec::new();
                                 if let Some(name) = call
-                                    .args
-                                    .iter()
-                                    .exactly_one()
-                                    .ok()
+                                    .only_arg()
                                     .and_then(|expr| expr.as_primary_string())
                                     .and_then(|s| parse_simple_literal(s.raw_value))
                                 {
@@ -487,10 +480,7 @@ impl Analyzer {
                             _ => {
                                 let mut events = Vec::new();
                                 if let Some(name) = call
-                                    .args
-                                    .iter()
-                                    .exactly_one()
-                                    .ok()
+                                    .only_arg()
                                     .and_then(|expr| expr.as_primary_string())
                                     .and_then(|s| parse_simple_literal(s.raw_value))
                                 {

@@ -190,6 +190,16 @@ pub struct Call<'i> {
     pub span: Span<'i>,
 }
 
+impl<'i> Call<'i> {
+    pub fn only_arg(&self) -> Option<&Expr<'i>> {
+        if self.args.len() == 1 {
+            Some(&self.args[0])
+        } else {
+            None
+        }
+    }
+}
+
 impl<'i> Node<'i> for Call<'i> {
     fn as_node(&self) -> &dyn Node<'i> {
         self
