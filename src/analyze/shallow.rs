@@ -66,7 +66,7 @@ impl From<LoopError> for std::io::Error {
 
 pub struct ShallowAnalyzer {
     storage: Arc<Mutex<DocumentStorage>>,
-    cache: BTreeMap<PathBuf, Arc<ShallowAnalyzedFile>>,
+    cache: BTreeMap<PathBuf, Pin<Arc<ShallowAnalyzedFile>>>,
 }
 
 impl ShallowAnalyzer {
@@ -81,7 +81,7 @@ impl ShallowAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-    ) -> std::io::Result<Arc<ShallowAnalyzedFile>> {
+    ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
         self.analyze_cached(path, workspace, &mut Vec::new())
     }
 
@@ -90,7 +90,7 @@ impl ShallowAnalyzer {
         path: &Path,
         workspace: &WorkspaceContext,
         visiting: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Arc<ShallowAnalyzedFile>> {
+    ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if let Some(cached_file) = self.cache.get(path) {
             if &cached_file.workspace == workspace
                 && cached_file.is_fresh(&self.storage.lock().unwrap())?
@@ -110,7 +110,7 @@ impl ShallowAnalyzer {
         path: &Path,
         workspace: &WorkspaceContext,
         visiting: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Arc<ShallowAnalyzedFile>> {
+    ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if visiting.iter().any(|p| p == path) {
             return Err(LoopError {
                 cycle: std::mem::take(visiting),
@@ -129,7 +129,7 @@ impl ShallowAnalyzer {
         path: &Path,
         workspace: &WorkspaceContext,
         visiting: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Arc<ShallowAnalyzedFile>> {
+    ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
         let document = match self.storage.lock().unwrap().read(path) {
             Ok(document) => document,
             Err(err) if err.kind() == ErrorKind::NotFound => {
@@ -150,7 +150,7 @@ impl ShallowAnalyzer {
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
 
-        Ok(Arc::new(ShallowAnalyzedFile {
+        Ok(Arc::pin(ShallowAnalyzedFile {
             document,
             workspace: workspace.clone(),
             ast_root,
@@ -164,7 +164,7 @@ impl ShallowAnalyzer {
         block: &'p Block<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
-        deps: &mut Vec<Arc<ShallowAnalyzedFile>>,
+        deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
         visiting: &mut Vec<PathBuf>,
     ) -> std::io::Result<ShallowAnalyzedBlock<'i, 'p>> {
         let mut analyzed_block = ShallowAnalyzedBlock::new_top_level();

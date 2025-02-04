@@ -73,11 +73,11 @@ pub struct ShallowAnalyzedFile {
     #[allow(unused)] // Backing analyzed_root
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
-    pub deps: Vec<Arc<ShallowAnalyzedFile>>,
+    pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
 }
 
 impl ShallowAnalyzedFile {
-    pub fn empty(path: &Path, workspace: &WorkspaceContext) -> Arc<Self> {
+    pub fn empty(path: &Path, workspace: &WorkspaceContext) -> Pin<Arc<Self>> {
         let document = Arc::pin(Document::empty(path));
         let ast_root = Box::pin(parse(&document.data));
         let analyzed_root = ShallowAnalyzedBlock::new_top_level();
@@ -87,7 +87,7 @@ impl ShallowAnalyzedFile {
         let analyzed_root = unsafe {
             std::mem::transmute::<ShallowAnalyzedBlock, ShallowAnalyzedBlock>(analyzed_root)
         };
-        Arc::new(ShallowAnalyzedFile {
+        Arc::pin(ShallowAnalyzedFile {
             document,
             workspace: workspace.clone(),
             ast_root,
@@ -139,7 +139,7 @@ pub struct AnalyzedFile {
     pub workspace: WorkspaceContext,
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
-    pub deps: Vec<Arc<ShallowAnalyzedFile>>,
+    pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     pub links: Vec<Link<'static>>,
     pub symbols: Vec<DocumentSymbol>,
 }
@@ -348,7 +348,7 @@ pub enum AnalyzedEvent<'i, 'p> {
 }
 
 pub struct AnalyzedImport<'i> {
-    pub file: Arc<ShallowAnalyzedFile>,
+    pub file: Pin<Arc<ShallowAnalyzedFile>>,
     pub span: Span<'i>,
 }
 

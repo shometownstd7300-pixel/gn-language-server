@@ -211,7 +211,7 @@ fn collect_symbols(node: &dyn Node, line_index: &LineIndex) -> Vec<DocumentSymbo
 struct WorkspaceCache {
     dot_gn_version: DocumentVersion,
     context: WorkspaceContext,
-    files: BTreeMap<PathBuf, Arc<AnalyzedFile>>,
+    files: BTreeMap<PathBuf, Pin<Arc<AnalyzedFile>>>,
 }
 
 pub struct Analyzer {
@@ -229,7 +229,7 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
+    pub fn analyze(&mut self, path: &Path) -> std::io::Result<Pin<Arc<AnalyzedFile>>> {
         if !path.is_absolute() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -274,7 +274,7 @@ impl Analyzer {
         Ok(self.cache.entry(workspace_root).or_insert(workspace_cache))
     }
 
-    fn analyze_cached(&mut self, path: &Path) -> std::io::Result<Arc<AnalyzedFile>> {
+    fn analyze_cached(&mut self, path: &Path) -> std::io::Result<Pin<Arc<AnalyzedFile>>> {
         let (cached_file, context) = {
             let workspace_cache = self.workspace_cache_for(path)?;
             (
@@ -300,7 +300,7 @@ impl Analyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-    ) -> std::io::Result<Arc<AnalyzedFile>> {
+    ) -> std::io::Result<Pin<Arc<AnalyzedFile>>> {
         let document = self.storage.lock().unwrap().read(path)?;
         let ast_root = Box::pin(parse(&document.data));
 
@@ -331,7 +331,7 @@ impl Analyzer {
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
 
-        Ok(Arc::new(AnalyzedFile {
+        Ok(Arc::pin(AnalyzedFile {
             document,
             workspace: workspace.clone(),
             ast_root,
@@ -347,7 +347,7 @@ impl Analyzer {
         block: &'p Block<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
-        deps: &mut Vec<Arc<ShallowAnalyzedFile>>,
+        deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     ) -> std::io::Result<AnalyzedBlock<'i, 'p>> {
         let events: Vec<AnalyzedEvent> = block
             .statements
@@ -563,7 +563,7 @@ impl Analyzer {
         expr: &'p Expr<'i>,
         workspace: &WorkspaceContext,
         document: &'i Document,
-        deps: &mut Vec<Arc<ShallowAnalyzedFile>>,
+        deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     ) -> std::io::Result<Vec<AnalyzedEvent<'i, 'p>>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
