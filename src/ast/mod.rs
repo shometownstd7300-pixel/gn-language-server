@@ -16,6 +16,7 @@ use either::Either;
 use pest::Span;
 
 mod parser;
+mod tests;
 
 pub trait Node<'i> {
     fn as_node(&self) -> &dyn Node<'i>;
@@ -34,12 +35,20 @@ pub trait Node<'i> {
         None
     }
 
+    fn as_error(&self) -> Option<&ErrorStatement<'i>> {
+        None
+    }
+
     fn identifiers<'n>(&'n self) -> FilterWalk<'i, 'n, Identifier<'i>> {
         FilterWalk::new(self.as_node(), |node| node.as_identifier())
     }
 
     fn strings<'n>(&'n self) -> FilterWalk<'i, 'n, StringLiteral<'i>> {
         FilterWalk::new(self.as_node(), |node| node.as_string())
+    }
+
+    fn errors<'n>(&'n self) -> FilterWalk<'i, 'n, ErrorStatement<'i>> {
+        FilterWalk::new(self.as_node(), |node| node.as_error())
     }
 }
 
@@ -592,6 +601,10 @@ pub enum ErrorStatement<'i> {
 impl<'i> Node<'i> for ErrorStatement<'i> {
     fn as_node(&self) -> &dyn Node<'i> {
         self
+    }
+
+    fn as_error(&self) -> Option<&ErrorStatement<'i>> {
+        Some(self)
     }
 
     fn children(&self) -> Vec<&dyn Node<'i>> {
