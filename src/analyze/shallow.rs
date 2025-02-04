@@ -303,7 +303,7 @@ impl ShallowAnalyzer {
                         }
                     }
                 }
-                Statement::Unknown(_) | Statement::UnmatchedBrace(_) => {}
+                Statement::Error(_) => {}
             }
         }
 

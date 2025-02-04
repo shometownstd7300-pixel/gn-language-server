@@ -62,6 +62,7 @@ impl<'i, 'n> Iterator for Walk<'i, 'n> {
         Some(node)
     }
 }
+
 pub struct FilterWalk<'i, 'n, T> {
     #[allow(clippy::type_complexity)]
     inner: std::iter::FilterMap<Walk<'i, 'n>, fn(&'n dyn Node<'i>) -> Option<&'n T>>,
@@ -88,8 +89,7 @@ pub enum Statement<'i> {
     Assignment(Box<Assignment<'i>>),
     Call(Box<Call<'i>>),
     Condition(Box<Condition<'i>>),
-    Unknown(Box<UnknownStatement<'i>>),
-    UnmatchedBrace(Box<UnmatchedBrace<'i>>),
+    Error(Box<ErrorStatement<'i>>),
 }
 
 impl<'i> Node<'i> for Statement<'i> {
@@ -102,8 +102,7 @@ impl<'i> Node<'i> for Statement<'i> {
             Statement::Assignment(assignment) => vec![assignment.as_node()],
             Statement::Call(call) => vec![call.as_node()],
             Statement::Condition(condition) => vec![condition.as_node()],
-            Statement::Unknown(unknown_statement) => vec![unknown_statement.as_node()],
-            Statement::UnmatchedBrace(unmatched_brace) => vec![unmatched_brace.as_node()],
+            Statement::Error(error) => vec![error.as_node()],
         }
     }
 
@@ -112,8 +111,7 @@ impl<'i> Node<'i> for Statement<'i> {
             Statement::Assignment(assignment) => assignment.span,
             Statement::Call(call) => call.span,
             Statement::Condition(condition) => condition.span,
-            Statement::Unknown(unknown_statement) => unknown_statement.span,
-            Statement::UnmatchedBrace(unmatched_brace) => unmatched_brace.span,
+            Statement::Error(error) => error.span(),
         }
     }
 
@@ -582,6 +580,32 @@ impl<'i> Node<'i> for ListLiteral<'i> {
 
     fn span(&self) -> Span<'i> {
         self.span
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum ErrorStatement<'i> {
+    UnknownStatement(Box<UnknownStatement<'i>>),
+    UnmatchedBrace(Box<UnmatchedBrace<'i>>),
+}
+
+impl<'i> Node<'i> for ErrorStatement<'i> {
+    fn as_node(&self) -> &dyn Node<'i> {
+        self
+    }
+
+    fn children(&self) -> Vec<&dyn Node<'i>> {
+        match self {
+            ErrorStatement::UnknownStatement(unknown) => vec![unknown.as_node()],
+            ErrorStatement::UnmatchedBrace(unmatched_brace) => vec![unmatched_brace.as_node()],
+        }
+    }
+
+    fn span(&self) -> Span<'i> {
+        match self {
+            ErrorStatement::UnknownStatement(unknown) => unknown.span,
+            ErrorStatement::UnmatchedBrace(unmatched_brace) => unmatched_brace.span,
+        }
     }
 }
 

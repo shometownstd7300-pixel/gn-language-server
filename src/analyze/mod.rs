@@ -197,8 +197,7 @@ fn collect_symbols(node: &dyn Node, line_index: &LineIndex) -> Vec<DocumentSymbo
 
                 symbols.push(top_symbol);
             }
-            Statement::Unknown(_) => {}
-            Statement::UnmatchedBrace(_) => {}
+            Statement::Error(_) => {}
         }
     } else {
         for child in node.children() {
@@ -544,7 +543,7 @@ impl Analyzer {
                         events.push(AnalyzedEvent::Conditions(condition_blocks));
                         Ok(events)
                     }
-                    Statement::Unknown(_) | Statement::UnmatchedBrace(_) => Ok(Vec::new()),
+                    Statement::Error(_) => Ok(Vec::new()),
                 }
             })
             .collect::<std::io::Result<Vec<_>>>()?

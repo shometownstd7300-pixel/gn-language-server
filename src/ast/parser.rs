@@ -129,10 +129,12 @@ fn convert_block(pair: Pair<Rule>) -> Block {
         .into_inner()
         .filter_map(|pair| match pair.as_rule() {
             Rule::statement => Some(convert_statement(pair, std::mem::take(&mut comments))),
-            Rule::error => Some(Statement::Unknown(Box::new(UnknownStatement {
-                text: pair.as_str(),
-                span: pair.as_span(),
-            }))),
+            Rule::error => Some(Statement::Error(Box::new(
+                ErrorStatement::UnknownStatement(Box::new(UnknownStatement {
+                    text: pair.as_str(),
+                    span: pair.as_span(),
+                })),
+            ))),
             Rule::comment => {
                 comments
                     .lines
@@ -319,13 +321,17 @@ fn convert_file(pair: Pair<Rule>) -> Block {
         .into_inner()
         .filter_map(|pair| match pair.as_rule() {
             Rule::statement => Some(convert_statement(pair, std::mem::take(&mut comments))),
-            Rule::error => Some(Statement::Unknown(Box::new(UnknownStatement {
-                text: pair.as_str(),
-                span: pair.as_span(),
-            }))),
-            Rule::unmatched_brace => Some(Statement::UnmatchedBrace(Box::new(UnmatchedBrace {
-                span: pair.as_span(),
-            }))),
+            Rule::error => Some(Statement::Error(Box::new(
+                ErrorStatement::UnknownStatement(Box::new(UnknownStatement {
+                    text: pair.as_str(),
+                    span: pair.as_span(),
+                })),
+            ))),
+            Rule::unmatched_brace => Some(Statement::Error(Box::new(
+                ErrorStatement::UnmatchedBrace(Box::new(UnmatchedBrace {
+                    span: pair.as_span(),
+                })),
+            ))),
             Rule::comment => {
                 comments
                     .lines

@@ -32,7 +32,7 @@ fn test_analyze_smoke() {
         .ast_root
         .statements
         .iter()
-        .all(|s| !matches!(s, Statement::Unknown(_) | Statement::UnmatchedBrace(_))));
+        .all(|s| !matches!(s, Statement::Error(_))));
 
     // Inspect the top-level scope.
     let scope = file.scope_at(0);
