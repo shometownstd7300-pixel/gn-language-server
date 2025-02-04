@@ -23,7 +23,7 @@ pub struct LineIndex<'i> {
 
 impl<'i> LineIndex<'i> {
     pub fn new(input: &'i str) -> Self {
-        let mut lines: Vec<&str> = input.lines().collect();
+        let mut lines: Vec<&str> = input.split_inclusive('\n').collect();
         if lines.is_empty() {
             lines.push(input);
         }
