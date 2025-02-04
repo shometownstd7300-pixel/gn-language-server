@@ -40,3 +40,16 @@ fn test_analyze_smoke() {
     assert!(scope.get("_lib").is_some());
     assert!(scope.get("is_linux").is_some());
 }
+
+#[test]
+fn test_analyze_cycles() {
+    let storage = Arc::new(Mutex::new(DocumentStorage::new()));
+    let mut analyzer = Analyzer::new(&storage);
+
+    assert!(analyzer
+        .analyze(&testdata("workspaces/cycles/ok1.gni"))
+        .is_ok());
+    assert!(analyzer
+        .analyze(&testdata("workspaces/cycles/bad1.gni"))
+        .is_err());
+}
