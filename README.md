@@ -46,6 +46,22 @@ the build configuration language used for Chromium.
 
 - Formatting
 
+## Building
+
+### Language server binary
+
+```sh
+cargo build --release
+```
+
+### VSCode extension
+
+```sh
+cd vscode-gn
+npm install
+npm run package
+```
+
 ## Disclaimer
 
 This is not an officially supported Google product. This project is not
