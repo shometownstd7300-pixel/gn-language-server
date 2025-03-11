@@ -60,7 +60,12 @@ impl Document {
     }
 
     pub fn need_check(&self) -> bool {
-        self.last_checked.read().unwrap().elapsed() >= CHECK_INTERVAL
+        if matches!(self.version, DocumentVersion::OnDisk { .. }) {
+            self.last_checked.read().unwrap().elapsed() >= CHECK_INTERVAL
+        } else {
+            // In-memory documents are cheap to check.
+            true
+        }
     }
 
     pub fn will_check(&self) -> bool {
