@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
+
 use itertools::Itertools;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, Documentation,
@@ -23,7 +25,7 @@ use crate::{
     builtins::BUILTINS,
 };
 
-use super::{into_rpc_error, ProviderContext, RpcResult};
+use super::{into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
 
 fn is_after_dot(data: &str, offset: usize) -> bool {
     for ch in data[..offset].chars().rev() {
@@ -46,7 +48,10 @@ pub async fn completion(
         .uri
         .to_file_path()
     else {
-        return Ok(None);
+        return Err(new_rpc_error(Cow::from(format!(
+            "invalid file URI: {}",
+            params.text_document_position.text_document.uri
+        ))));
     };
 
     let current_file = context

@@ -56,10 +56,16 @@ impl ProviderContext {
     }
 }
 
+pub fn new_rpc_error(message: Cow<'static, str>) -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(1),
+        message,
+        data: None,
+    }
+}
+
 pub fn into_rpc_error(err: std::io::Error) -> tower_lsp::jsonrpc::Error {
-    let mut rpc_err = tower_lsp::jsonrpc::Error::internal_error();
-    rpc_err.message = Cow::from(err.to_string());
-    rpc_err
+    new_rpc_error(Cow::from(err.to_string()))
 }
 
 pub fn lookup_identifier_at(file: &AnalyzedFile, position: Position) -> Option<&Identifier> {

@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
+use std::{borrow::Cow, path::PathBuf};
 
 use itertools::Itertools;
 use tower_lsp::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 
 use crate::analyze::Link;
 
-use super::{into_rpc_error, ProviderContext, RpcResult};
+use super::{into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TargetLinkData {
@@ -32,7 +32,10 @@ pub async fn document_link(
     params: DocumentLinkParams,
 ) -> RpcResult<Option<Vec<DocumentLink>>> {
     let Ok(path) = params.text_document.uri.to_file_path() else {
-        return Ok(None);
+        return Err(new_rpc_error(Cow::from(format!(
+            "invalid file URI: {}",
+            params.text_document.uri
+        ))));
     };
 
     let current_file = context
@@ -79,7 +82,7 @@ pub async fn document_link_resolve(
         .take()
         .and_then(|value| serde_json::from_value::<TargetLinkData>(value).ok())
     else {
-        return Err(tower_lsp::jsonrpc::Error::internal_error());
+        return Err(new_rpc_error(Cow::from("corrupted target link data")));
     };
 
     let target_file = context

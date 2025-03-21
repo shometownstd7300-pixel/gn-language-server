@@ -12,16 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
+
 use tower_lsp::lsp_types::{DocumentSymbolParams, DocumentSymbolResponse};
 
-use super::{into_rpc_error, ProviderContext, RpcResult};
+use super::{into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
 
 pub async fn document_symbol(
     context: &ProviderContext,
     params: DocumentSymbolParams,
 ) -> RpcResult<Option<DocumentSymbolResponse>> {
     let Ok(path) = params.text_document.uri.to_file_path() else {
-        return Ok(None);
+        return Err(new_rpc_error(Cow::from(format!(
+            "invalid file URI: {}",
+            params.text_document.uri
+        ))));
     };
 
     let current_file = context
