@@ -24,8 +24,11 @@ pub struct LineIndex<'i> {
 impl<'i> LineIndex<'i> {
     pub fn new(input: &'i str) -> Self {
         let mut lines: Vec<&str> = input.split_inclusive('\n').collect();
-        if lines.is_empty() {
+        if input.is_empty() {
             lines.push(input);
+        }
+        if input.ends_with('\n') {
+            lines.push(&input[input.len()..]);
         }
         Self { input, lines }
     }
@@ -82,5 +85,69 @@ pub fn parse_simple_literal(s: &str) -> Option<&str> {
         None
     } else {
         Some(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_index() {
+        let input = "\n\nfoo\n\n";
+        let index = LineIndex::new(input);
+
+        assert_eq!(index.position(0), Position::new(0, 0));
+        assert_eq!(index.position(1), Position::new(1, 0));
+        assert_eq!(index.position(2), Position::new(2, 0));
+        assert_eq!(index.position(3), Position::new(2, 1));
+        assert_eq!(index.position(4), Position::new(2, 2));
+        assert_eq!(index.position(5), Position::new(2, 3));
+        assert_eq!(index.position(6), Position::new(3, 0));
+        assert_eq!(index.position(7), Position::new(4, 0));
+
+        assert_eq!(index.offset(Position::new(0, 0)), Some(0));
+        assert_eq!(index.offset(Position::new(1, 0)), Some(1));
+        assert_eq!(index.offset(Position::new(2, 0)), Some(2));
+        assert_eq!(index.offset(Position::new(2, 1)), Some(3));
+        assert_eq!(index.offset(Position::new(2, 2)), Some(4));
+        assert_eq!(index.offset(Position::new(2, 3)), Some(5));
+        assert_eq!(index.offset(Position::new(3, 0)), Some(6));
+        assert_eq!(index.offset(Position::new(4, 0)), Some(7));
+        assert_eq!(index.offset(Position::new(4, 1)), None);
+        assert_eq!(index.offset(Position::new(5, 0)), None);
+    }
+
+    #[test]
+    fn line_index_no_last_newline() {
+        let input = "\n\nfoo";
+        let index = LineIndex::new(input);
+
+        assert_eq!(index.position(0), Position::new(0, 0));
+        assert_eq!(index.position(1), Position::new(1, 0));
+        assert_eq!(index.position(2), Position::new(2, 0));
+        assert_eq!(index.position(3), Position::new(2, 1));
+        assert_eq!(index.position(4), Position::new(2, 2));
+        assert_eq!(index.position(5), Position::new(2, 3));
+
+        assert_eq!(index.offset(Position::new(0, 0)), Some(0));
+        assert_eq!(index.offset(Position::new(1, 0)), Some(1));
+        assert_eq!(index.offset(Position::new(2, 0)), Some(2));
+        assert_eq!(index.offset(Position::new(2, 1)), Some(3));
+        assert_eq!(index.offset(Position::new(2, 2)), Some(4));
+        assert_eq!(index.offset(Position::new(2, 3)), Some(5));
+        assert_eq!(index.offset(Position::new(3, 0)), None);
+    }
+
+    #[test]
+    fn line_index_empty() {
+        let input = "";
+        let index = LineIndex::new(input);
+
+        assert_eq!(index.position(0), Position::new(0, 0));
+
+        assert_eq!(index.offset(Position::new(0, 0)), Some(0));
+        assert_eq!(index.offset(Position::new(1, 0)), None);
+        assert_eq!(index.offset(Position::new(0, 1)), None);
     }
 }
