@@ -67,7 +67,12 @@
         "gn.experimental.backgroundIndexing": {
           "type": "boolean",
           "default": false,
-          "description": "Enables background indexing"
+          "description": "Enables background indexing (experimental)."
+        },
+        "gn.binaryPath": {
+          "type": "string",
+          "default": null,
+          "description": "Path to the GN binary. If unset, it is auto-detected."
         },
         "gn.trace.server": {
           "type": "string",
@@ -77,7 +82,7 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Traces the language server communication"
+          "description": "Traces the language server communication."
         }
       }
     }
