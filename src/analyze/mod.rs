@@ -247,10 +247,10 @@ impl Analyzer {
 
         let cache_hit = self
             .cache
-            .get(&workspace_root)
+            .get(workspace_root)
             .is_some_and(|workspace_cache| workspace_cache.dot_gn_version == dot_gn_version);
         if cache_hit {
-            return Ok(self.cache.get_mut(&workspace_root).unwrap());
+            return Ok(self.cache.get_mut(workspace_root).unwrap());
         }
 
         let build_config = {
@@ -260,7 +260,7 @@ impl Analyzer {
         };
 
         let context = WorkspaceContext {
-            root: workspace_root.clone(),
+            root: workspace_root.to_path_buf(),
             build_config,
         };
 
@@ -269,7 +269,7 @@ impl Analyzer {
             context,
             files: BTreeMap::new(),
         };
-        Ok(self.cache.entry(workspace_root).or_insert(workspace_cache))
+        Ok(self.cache.entry(workspace_root.to_path_buf()).or_insert(workspace_cache))
     }
 
     fn analyze_cached(&mut self, path: &Path) -> std::io::Result<Pin<Arc<AnalyzedFile>>> {

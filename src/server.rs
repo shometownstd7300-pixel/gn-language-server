@@ -21,12 +21,7 @@ use std::{
 use tokio::spawn;
 use tower_lsp::{
     lsp_types::{
-        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions,
-        DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-        GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
-        InitializeResult, InitializedParams, MessageType, OneOf, ServerCapabilities,
-        TextDocumentSyncCapability, TextDocumentSyncKind,
+        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit
     },
     LanguageServer, LspService, Server,
 };
@@ -76,6 +71,7 @@ impl LanguageServer for Backend {
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions::default()),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -98,6 +94,7 @@ impl LanguageServer for Backend {
         if configurations.experimental.background_indexing {
             if let Ok(path) = params.text_document.uri.to_file_path() {
                 if let Ok(workspace_root) = find_workspace_root(&path) {
+                    let workspace_root = workspace_root.to_path_buf();
                     let do_index = {
                         let mut indexed_workspaces = self.indexed_workspaces.lock().unwrap();
                         indexed_workspaces.insert(workspace_root.clone())
@@ -153,6 +150,10 @@ impl LanguageServer for Backend {
 
     async fn completion(&self, params: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
         crate::providers::completion::completion(&self.context, params).await
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> RpcResult<Option<Vec<TextEdit>>> {
+        crate::providers::formatting::formatting(&self.context, params).await
     }
 }
 

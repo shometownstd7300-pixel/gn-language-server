@@ -42,10 +42,6 @@ the build configuration language used for Chromium.
 
 ![Code folding](./docs/screenshots/code_folding.png)
 
-## TODO
-
-- Formatting
-
 ## Building
 
 ### Language server binary

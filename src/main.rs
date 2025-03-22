@@ -14,6 +14,7 @@
 
 mod analyze;
 mod ast;
+mod binary;
 mod builtins;
 mod client;
 mod config;

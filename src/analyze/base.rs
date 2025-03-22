@@ -27,10 +27,10 @@ use crate::{
     storage::{Document, DocumentStorage},
 };
 
-pub fn find_workspace_root(path: &Path) -> std::io::Result<PathBuf> {
+pub fn find_workspace_root(path: &Path) -> std::io::Result<&Path> {
     for dir in path.ancestors().skip(1) {
         if dir.join(".gn").try_exists()? {
-            return Ok(dir.to_path_buf());
+            return Ok(dir);
         }
     }
     Err(std::io::Error::new(
