@@ -21,7 +21,13 @@ use std::{
 use tokio::spawn;
 use tower_lsp::{
     lsp_types::{
-        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit
+        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
+        DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams,
+        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+        HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+        MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        TextEdit,
     },
     LanguageServer, LspService, Server,
 };
@@ -152,7 +158,10 @@ impl LanguageServer for Backend {
         crate::providers::completion::completion(&self.context, params).await
     }
 
-    async fn formatting(&self, params: DocumentFormattingParams) -> RpcResult<Option<Vec<TextEdit>>> {
+    async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> RpcResult<Option<Vec<TextEdit>>> {
         crate::providers::formatting::formatting(&self.context, params).await
     }
 }

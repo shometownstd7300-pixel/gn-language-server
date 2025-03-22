@@ -269,7 +269,10 @@ impl Analyzer {
             context,
             files: BTreeMap::new(),
         };
-        Ok(self.cache.entry(workspace_root.to_path_buf()).or_insert(workspace_cache))
+        Ok(self
+            .cache
+            .entry(workspace_root.to_path_buf())
+            .or_insert(workspace_cache))
     }
 
     fn analyze_cached(&mut self, path: &Path) -> std::io::Result<Pin<Arc<AnalyzedFile>>> {
