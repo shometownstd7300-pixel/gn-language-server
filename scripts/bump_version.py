@@ -44,8 +44,13 @@ def main():
     print(new_version)
 
     if options.update:
-        subprocess.check_call(['cargo', 'set-version', new_version])
-        subprocess.check_call(['npm', 'version', new_version], cwd='vscode-gn')
+        subprocess.check_call(
+            ['cargo', 'set-version', new_version],
+            stdout=subprocess.DEVNULL)
+        subprocess.check_call(
+            ['npm', 'version', new_version],
+            cwd='vscode-gn',
+            stdout=subprocess.DEVNULL)
     else:
         print(
             'INFO: Not updating manifests as --update was not set',
