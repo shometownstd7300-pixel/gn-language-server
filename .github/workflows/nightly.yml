@@ -58,4 +58,5 @@ jobs:
           version=$(./scripts/bump_version.py --update)
           git commit -a -m "Bump version to $version"
           git tag "v$version"
-          git push --follow-tags
+          git push origin ${{ github.head_ref }}
+          git push origin "v$version"
