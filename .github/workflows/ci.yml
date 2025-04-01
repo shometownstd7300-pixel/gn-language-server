@@ -148,7 +148,7 @@ jobs:
       - run: npm ci
         working-directory: vscode-gn
         if: startsWith(github.ref, 'refs/tags/v')
-      - run: npx -y vsce publish $(python3 ../scripts/release_flags.py) --packagePath *.vsix
+      - run: npx -y vsce publish --skip-duplicate $(python3 ../scripts/release_flags.py) --packagePath *.vsix
         working-directory: vscode-gn
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
