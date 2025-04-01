@@ -56,6 +56,15 @@ the build configuration language used for Chromium.
 
 ![Code folding](/docs/screenshots/code_folding.png)
 
+## Versioning scheme
+
+We use the versioning scheme recommended by the
+[VSCode's official documentation](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#prerelease-extensions).
+That is:
+
+- Pre-release versions are `1.<odd>.x`
+- Release versions are `1.<even>.x`
+
 ## Disclaimer
 
 This is not an officially supported Google product. This project is not
