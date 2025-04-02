@@ -53,10 +53,16 @@ jobs:
       - run: cargo install --force --locked cargo-edit@0.13.2
         if: steps.check-commits.outputs.has_commits == 'yes'
       - name: Bump version
+        id: bump_version
         if: steps.check-commits.outputs.has_commits == 'yes'
         run: |
           version=$(./scripts/bump_version.py --update)
+          echo "version=$version" >> $GITHUB_OUTPUT
           git commit -a -m "Bump version to $version"
           git tag "v$version"
           git push origin ${{ github.head_ref }}
           git push origin "v$version"
+      - name: Create a release
+        if: steps.check-commits.outputs.has_commits == 'yes'
+        run: |
+          gh release create "v${{ steps.bump_version.outputs.version }}" --prerelease --latest=false --generate-notes
