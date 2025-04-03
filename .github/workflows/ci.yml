@@ -151,6 +151,8 @@ jobs:
           mv vscode-gn-vsix-darwin-arm64/gn-darwin-arm64-${{ steps.version.outputs.version }}.vsix gn_${{ steps.version.outputs.version }}_darwin_arm64.vsix
           mv vscode-gn-vsix-win32-x64/gn-win32-x64-${{ steps.version.outputs.version }}.vsix gn_${{ steps.version.outputs.version }}_windows_amd64.vsix
       - run: gh release upload --clobber ${{ github.ref_name }} gn-language-server_* gn_*.vsix
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   publish:
     runs-on: ubuntu-latest
