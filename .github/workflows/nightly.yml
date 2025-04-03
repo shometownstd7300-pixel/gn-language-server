@@ -66,3 +66,5 @@ jobs:
         if: steps.check-commits.outputs.has_commits == 'yes'
         run: |
           gh release create "v${{ steps.bump_version.outputs.version }}" --prerelease --latest=false --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
