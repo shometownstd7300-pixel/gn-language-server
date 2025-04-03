@@ -146,7 +146,7 @@ jobs:
         run: |
           mv gn-language-server-x86_64-unknown-linux-musl/gn-language-server gn-language-server_${{ steps.version.outputs.version }}_linux_amd64
           mv gn-language-server-aarch64-apple-darwin/gn-language-server gn-language-server_${{ steps.version.outputs.version }}_darwin_arm64
-          mv gn-language-server-x86_64-pc-windows-msvc/gn-language-server gn-language-server_${{ steps.version.outputs.version }}_windows_amd64.exe
+          mv gn-language-server-x86_64-pc-windows-msvc/gn-language-server.exe gn-language-server_${{ steps.version.outputs.version }}_windows_amd64.exe
           mv vscode-gn-vsix-linux-x64/gn-linux-x64-${{ steps.version.outputs.version }}.vsix gn_${{ steps.version.outputs.version }}_linux_amd64.vsix
           mv vscode-gn-vsix-darwin-arm64/gn-darwin-arm64-${{ steps.version.outputs.version }}.vsix gn_${{ steps.version.outputs.version }}_darwin_arm64.vsix
           mv vscode-gn-vsix-win32-x64/gn-win32-x64-${{ steps.version.outputs.version }}.vsix gn_${{ steps.version.outputs.version }}_windows_amd64.vsix
