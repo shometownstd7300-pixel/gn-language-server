@@ -38,11 +38,20 @@ pub async fn formatting(
 
     let configs = context.client.configurations().await;
     let gn_path = if let Some(gn_path) = &configs.binary_path {
-        gn_path.to_path_buf()
+        if gn_path.exists() {
+            gn_path.to_path_buf()
+        } else {
+            return Err(new_rpc_error(Cow::from(format!(
+                "gn binary not found at {}; check configuration value gn.binaryPath",
+                gn_path.display()
+            ))));
+        }
     } else if let Some(gn_path) = find_gn_binary(find_workspace_root(&file_path).ok()) {
         gn_path
     } else {
-        return Err(new_rpc_error(Cow::from("gn binary not found")));
+        return Err(new_rpc_error(Cow::from(
+            "gn binary not found; specify configuration value gn.binaryPath",
+        )));
     };
 
     let document = context
