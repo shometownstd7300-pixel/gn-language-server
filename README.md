@@ -4,7 +4,7 @@
 
 A [language server](https://microsoft.github.io/language-server-protocol/) for
 [GN](https://gn.googlesource.com/gn/),
-the build configuration language used for Chromium.
+the build configuration language used in Chromium, Fuchsia, and other projects.
 
 ## Features
 
