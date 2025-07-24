@@ -95,3 +95,28 @@ fn error_recovery() {
 
     // TODO: Add more tests.
 }
+
+#[test]
+fn missing_comma() {
+    let block = parse("a = [1, 2 3]");
+    let errors: Vec<_> = block
+        .errors()
+        .map(|e| (e.span().start(), e.span().end()))
+        .collect();
+    assert_eq!(errors, [(9, 9)]);
+}
+
+#[test]
+fn open_string() {
+    let block = parse(
+        r#"
+a = [
+  "aaa",
+  "bb
+  "ccc",
+]
+"#,
+    );
+    let errors: Vec<_> = block.errors().map(|e| e.span().as_str()).collect();
+    assert_eq!(errors, ["\"bb\n", ""]);
+}

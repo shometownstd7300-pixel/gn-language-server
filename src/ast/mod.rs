@@ -35,19 +35,19 @@ pub trait Node<'i> {
         None
     }
 
-    fn as_error(&self) -> Option<&ErrorStatement<'i>> {
+    fn as_error<'n>(&'n self) -> Option<ErrorRef<'i, 'n>> {
         None
     }
 
-    fn identifiers<'n>(&'n self) -> FilterWalk<'i, 'n, Identifier<'i>> {
+    fn identifiers<'n>(&'n self) -> FilterWalk<'i, 'n, &'n Identifier<'i>> {
         FilterWalk::new(self.as_node(), |node| node.as_identifier())
     }
 
-    fn strings<'n>(&'n self) -> FilterWalk<'i, 'n, StringLiteral<'i>> {
+    fn strings<'n>(&'n self) -> FilterWalk<'i, 'n, &'n StringLiteral<'i>> {
         FilterWalk::new(self.as_node(), |node| node.as_string())
     }
 
-    fn errors<'n>(&'n self) -> FilterWalk<'i, 'n, ErrorStatement<'i>> {
+    fn errors<'n>(&'n self) -> FilterWalk<'i, 'n, ErrorRef<'i, 'n>> {
         FilterWalk::new(self.as_node(), |node| node.as_error())
     }
 }
@@ -74,19 +74,19 @@ impl<'i, 'n> Iterator for Walk<'i, 'n> {
 
 pub struct FilterWalk<'i, 'n, T> {
     #[allow(clippy::type_complexity)]
-    inner: std::iter::FilterMap<Walk<'i, 'n>, fn(&'n dyn Node<'i>) -> Option<&'n T>>,
+    inner: std::iter::FilterMap<Walk<'i, 'n>, fn(&'n dyn Node<'i>) -> Option<T>>,
 }
 
 impl<'i, 'n, T> FilterWalk<'i, 'n, T> {
-    pub fn new(node: &'n dyn Node<'i>, filter: fn(&'n dyn Node<'i>) -> Option<&'n T>) -> Self {
+    pub fn new(node: &'n dyn Node<'i>, filter: fn(&'n dyn Node<'i>) -> Option<T>) -> Self {
         FilterWalk {
             inner: Walk::new(node).filter_map(filter),
         }
     }
 }
 
-impl<'n, T> Iterator for FilterWalk<'_, 'n, T> {
-    type Item = &'n T;
+impl<T> Iterator for FilterWalk<'_, '_, T> {
+    type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
@@ -375,6 +375,7 @@ pub enum PrimaryExpr<'i> {
     Block(Box<Block<'i>>),
     ParenExpr(Box<ParenExpr<'i>>),
     List(Box<ListLiteral<'i>>),
+    Error(Box<ErrorPrimaryExpr<'i>>),
 }
 
 impl<'i> Node<'i> for PrimaryExpr<'i> {
@@ -393,6 +394,7 @@ impl<'i> Node<'i> for PrimaryExpr<'i> {
             PrimaryExpr::Block(block) => vec![block.as_node()],
             PrimaryExpr::ParenExpr(paren_expr) => vec![paren_expr.as_node()],
             PrimaryExpr::List(list) => vec![list.as_node()],
+            PrimaryExpr::Error(error) => vec![error.as_node()],
         }
     }
 
@@ -407,6 +409,7 @@ impl<'i> Node<'i> for PrimaryExpr<'i> {
             PrimaryExpr::Block(block) => block.span(),
             PrimaryExpr::ParenExpr(expr) => expr.span(),
             PrimaryExpr::List(list) => list.span(),
+            PrimaryExpr::Error(error) => error.span(),
         }
     }
 }
@@ -602,6 +605,39 @@ impl<'i> Node<'i> for ListLiteral<'i> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ErrorRef<'i, 'n> {
+    Statement(&'n ErrorStatement<'i>),
+    PrimaryExpr(&'n ErrorPrimaryExpr<'i>),
+}
+
+impl<'i, 'n> Node<'i> for ErrorRef<'i, 'n> {
+    fn as_node(&self) -> &'n dyn Node<'i> {
+        match self {
+            ErrorRef::Statement(statement) => statement.as_node(),
+            ErrorRef::PrimaryExpr(primary_expr) => primary_expr.as_node(),
+        }
+    }
+
+    fn as_error(&self) -> Option<ErrorRef<'i, 'n>> {
+        Some(*self)
+    }
+
+    fn children(&self) -> Vec<&'n dyn Node<'i>> {
+        match self {
+            ErrorRef::Statement(statement) => statement.children(),
+            ErrorRef::PrimaryExpr(primary_expr) => primary_expr.children(),
+        }
+    }
+
+    fn span(&self) -> Span<'i> {
+        match self {
+            ErrorRef::Statement(statement) => statement.span(),
+            ErrorRef::PrimaryExpr(primary_expr) => primary_expr.span(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ErrorStatement<'i> {
     UnknownStatement(Box<UnknownStatement<'i>>),
@@ -613,8 +649,8 @@ impl<'i> Node<'i> for ErrorStatement<'i> {
         self
     }
 
-    fn as_error(&self) -> Option<&ErrorStatement<'i>> {
-        Some(self)
+    fn as_error<'n>(&'n self) -> Option<ErrorRef<'i, 'n>> {
+        Some(ErrorRef::Statement(self))
     }
 
     fn children(&self) -> Vec<&dyn Node<'i>> {
@@ -658,6 +694,75 @@ pub struct UnmatchedBrace<'i> {
 }
 
 impl<'i> Node<'i> for UnmatchedBrace<'i> {
+    fn as_node(&self) -> &dyn Node<'i> {
+        self
+    }
+
+    fn children(&self) -> Vec<&dyn Node<'i>> {
+        Vec::new()
+    }
+
+    fn span(&self) -> Span<'i> {
+        self.span
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum ErrorPrimaryExpr<'i> {
+    OpenString(Box<OpenStringLiteral<'i>>),
+    MissingComma(Box<MissingComma<'i>>),
+}
+
+impl<'i> Node<'i> for ErrorPrimaryExpr<'i> {
+    fn as_node(&self) -> &dyn Node<'i> {
+        self
+    }
+
+    fn as_error<'n>(&'n self) -> Option<ErrorRef<'i, 'n>> {
+        Some(ErrorRef::PrimaryExpr(self))
+    }
+
+    fn children(&self) -> Vec<&dyn Node<'i>> {
+        match self {
+            ErrorPrimaryExpr::OpenString(open_string) => open_string.children(),
+            ErrorPrimaryExpr::MissingComma(missing_comma) => missing_comma.children(),
+        }
+    }
+
+    fn span(&self) -> Span<'i> {
+        match self {
+            ErrorPrimaryExpr::OpenString(open_string) => open_string.span,
+            ErrorPrimaryExpr::MissingComma(missing_comma) => missing_comma.span,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct OpenStringLiteral<'i> {
+    pub text: &'i str,
+    pub span: Span<'i>,
+}
+
+impl<'i> Node<'i> for OpenStringLiteral<'i> {
+    fn as_node(&self) -> &dyn Node<'i> {
+        self
+    }
+
+    fn children(&self) -> Vec<&dyn Node<'i>> {
+        Vec::new()
+    }
+
+    fn span(&self) -> Span<'i> {
+        self.span
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MissingComma<'i> {
+    pub span: Span<'i>,
+}
+
+impl<'i> Node<'i> for MissingComma<'i> {
     fn as_node(&self) -> &dyn Node<'i> {
         self
     }

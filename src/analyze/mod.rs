@@ -593,7 +593,8 @@ impl Analyzer {
                 | PrimaryExpr::Integer(_)
                 | PrimaryExpr::String(_)
                 | PrimaryExpr::ArrayAccess(_)
-                | PrimaryExpr::ScopeAccess(_) => Ok(Vec::new()),
+                | PrimaryExpr::ScopeAccess(_)
+                | PrimaryExpr::Error(_) => Ok(Vec::new()),
             },
             Expr::Unary(unary_expr) => {
                 self.analyze_expr(&unary_expr.expr, workspace, document, deps)

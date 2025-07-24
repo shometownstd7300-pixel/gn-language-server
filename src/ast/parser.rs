@@ -87,6 +87,17 @@ fn convert_string(pair: Pair<Rule>) -> StringLiteral {
     }
 }
 
+fn convert_open_string(pair: Pair<Rule>) -> OpenStringLiteral {
+    assert!(matches!(pair.as_rule(), Rule::open_string));
+    let span = pair.as_span();
+    let pair = pair.into_inner().exactly_one().unwrap();
+    assert!(matches!(pair.as_rule(), Rule::open_string_content));
+    OpenStringLiteral {
+        text: pair.as_str(),
+        span,
+    }
+}
+
 fn convert_list(pair: Pair<Rule>) -> ListLiteral {
     assert!(matches!(pair.as_rule(), Rule::list));
     let span = pair.as_span();
@@ -158,6 +169,9 @@ fn convert_primary(pair: Pair<Rule>) -> PrimaryExpr {
         Rule::block => PrimaryExpr::Block(Box::new(convert_block(pair))),
         Rule::paren_expr => PrimaryExpr::ParenExpr(Box::new(convert_paren_expr(pair))),
         Rule::list => PrimaryExpr::List(Box::new(convert_list(pair))),
+        Rule::open_string => PrimaryExpr::Error(Box::new(ErrorPrimaryExpr::OpenString(Box::new(
+            convert_open_string(pair),
+        )))),
         _ => unreachable!(),
     }
 }
@@ -220,7 +234,23 @@ fn convert_paren_expr(pair: Pair<Rule>) -> ParenExpr {
 
 fn convert_expr_list(pair: Pair<Rule>) -> Vec<Expr> {
     assert!(matches!(pair.as_rule(), Rule::expr_list));
-    pair.into_inner().map(convert_expr).collect()
+    let mut iter = pair.into_inner();
+    let Some(first_pair) = iter.next() else {
+        return Vec::new();
+    };
+    let mut exprs = vec![convert_expr(first_pair)];
+    iter.tuples().for_each(|(comma_pair, expr_pair)| {
+        if comma_pair.as_str().is_empty() {
+            let pos = exprs.last().unwrap().span().end_pos();
+            exprs.push(Expr::Primary(Box::new(PrimaryExpr::Error(Box::new(
+                ErrorPrimaryExpr::MissingComma(Box::new(MissingComma {
+                    span: pos.span(&pos),
+                })),
+            )))));
+        }
+        exprs.push(convert_expr(expr_pair));
+    });
+    exprs
 }
 
 fn convert_lvalue(pair: Pair<Rule>) -> LValue {

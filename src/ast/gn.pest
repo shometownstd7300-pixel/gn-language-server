@@ -30,10 +30,10 @@ scope_access = !{ identifier ~ "." ~ identifier }
 expr = !{ prefix* ~ primary ~ (infix ~ prefix* ~ primary)* }
 prefix = _{ not }
 infix = _{ add | sub | le | lt | ge | gt | eq | ne | and | or }
-primary = _{ call | array_access | scope_access | block | paren_expr | list | integer | string | identifier}
+primary = _{ call | array_access | scope_access | block | paren_expr | list | integer | string | identifier | open_string }
 paren_expr = !{ "(" ~ expr ~ ")" }
 list = !{ "[" ~ expr_list ~ ","? ~ "]" }
-expr_list = !{ (expr ~ ("," ~ expr)*)? }
+expr_list = !{ (expr ~ (needs_comma ~ expr)*)? }
 
 assign_op = { "=" | "+=" | "-=" }
 add = { "+" }
@@ -52,11 +52,14 @@ identifier = @{ ('A'..'Z' | 'a'..'z' | "_") ~ ('A'..'Z' | 'a'..'z' | '0'..'9' | 
 integer = @{ "-"? ~ ('0'..'9')+ }
 string = ${ "\"" ~ string_content ~ "\"" }
 string_content = @{ char* }
-char = { escaped_hex_char | embedded_expr | embedded_identifier | !("\"" | "\\") ~ ANY | "\\" ~ ANY }
+open_string = ${ "\"" ~ open_string_content ~ (NEWLINE | EOI) }
+open_string_content = @{ (!NEWLINE ~ ANY)* }
+char = { !NEWLINE ~ (escaped_hex_char | embedded_expr | embedded_identifier | !("\"" | "\\") ~ ANY | "\\" ~ ANY) }
 escaped_hex_char = { "$0x" ~ ('0'..'9' | 'A'..'F' | 'a'..'f'){2} }
 embedded_expr = !{ "${" ~ expr ~ "}" }
 embedded_identifier = !{ embedded_identifier_inner }
 embedded_identifier_inner = ${ "$" ~ identifier }
+needs_comma = { ","? }
 
 comment = ${ "#" ~ " "? ~ comment_content ~ NEWLINE? }
 comment_content = @{ (!NEWLINE ~ ANY)* }
