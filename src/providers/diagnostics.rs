@@ -44,7 +44,7 @@ pub async fn publish_diagnostics(context: &ProviderContext, uri: &Url) {
         .map(|error| Diagnostic {
             range: current_file.document.line_index.range(error.span()),
             severity: Some(DiagnosticSeverity::ERROR),
-            message: "Syntax error".to_string(),
+            message: error.diagnosis().to_string(),
             ..Default::default()
         })
         .collect();

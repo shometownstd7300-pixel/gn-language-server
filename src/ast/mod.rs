@@ -611,6 +611,15 @@ pub enum ErrorRef<'i, 'n> {
     PrimaryExpr(&'n ErrorPrimaryExpr<'i>),
 }
 
+impl ErrorRef<'_, '_> {
+    pub fn diagnosis(&self) -> &'static str {
+        match self {
+            ErrorRef::Statement(statement) => statement.diagnosis(),
+            ErrorRef::PrimaryExpr(primary_expr) => primary_expr.diagnosis(),
+        }
+    }
+}
+
 impl<'i, 'n> Node<'i> for ErrorRef<'i, 'n> {
     fn as_node(&self) -> &'n dyn Node<'i> {
         match self {
@@ -644,6 +653,15 @@ pub enum ErrorStatement<'i> {
     UnmatchedBrace(Box<UnmatchedBrace<'i>>),
 }
 
+impl ErrorStatement<'_> {
+    pub fn diagnosis(&self) -> &'static str {
+        match self {
+            ErrorStatement::UnknownStatement(unknown) => unknown.diagnosis(),
+            ErrorStatement::UnmatchedBrace(unmatched_brace) => unmatched_brace.diagnosis(),
+        }
+    }
+}
+
 impl<'i> Node<'i> for ErrorStatement<'i> {
     fn as_node(&self) -> &dyn Node<'i> {
         self
@@ -674,6 +692,12 @@ pub struct UnknownStatement<'i> {
     pub span: Span<'i>,
 }
 
+impl UnknownStatement<'_> {
+    pub fn diagnosis(&self) -> &'static str {
+        "Unknown statement"
+    }
+}
+
 impl<'i> Node<'i> for UnknownStatement<'i> {
     fn as_node(&self) -> &dyn Node<'i> {
         self
@@ -691,6 +715,12 @@ impl<'i> Node<'i> for UnknownStatement<'i> {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnmatchedBrace<'i> {
     pub span: Span<'i>,
+}
+
+impl UnmatchedBrace<'_> {
+    pub fn diagnosis(&self) -> &'static str {
+        "Unmatched brace"
+    }
 }
 
 impl<'i> Node<'i> for UnmatchedBrace<'i> {
@@ -711,6 +741,15 @@ impl<'i> Node<'i> for UnmatchedBrace<'i> {
 pub enum ErrorPrimaryExpr<'i> {
     OpenString(Box<OpenStringLiteral<'i>>),
     MissingComma(Box<MissingComma<'i>>),
+}
+
+impl ErrorPrimaryExpr<'_> {
+    pub fn diagnosis(&self) -> &'static str {
+        match self {
+            ErrorPrimaryExpr::OpenString(open_string) => open_string.diagnosis(),
+            ErrorPrimaryExpr::MissingComma(missing_comma) => missing_comma.diagnosis(),
+        }
+    }
 }
 
 impl<'i> Node<'i> for ErrorPrimaryExpr<'i> {
@@ -743,6 +782,12 @@ pub struct OpenStringLiteral<'i> {
     pub span: Span<'i>,
 }
 
+impl OpenStringLiteral<'_> {
+    pub fn diagnosis(&self) -> &'static str {
+        "Open string literal"
+    }
+}
+
 impl<'i> Node<'i> for OpenStringLiteral<'i> {
     fn as_node(&self) -> &dyn Node<'i> {
         self
@@ -760,6 +805,12 @@ impl<'i> Node<'i> for OpenStringLiteral<'i> {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MissingComma<'i> {
     pub span: Span<'i>,
+}
+
+impl MissingComma<'_> {
+    pub fn diagnosis(&self) -> &'static str {
+        "Missing comma"
+    }
 }
 
 impl<'i> Node<'i> for MissingComma<'i> {
