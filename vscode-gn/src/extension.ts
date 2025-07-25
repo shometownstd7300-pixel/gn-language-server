@@ -176,20 +176,18 @@ async function startLanguageServer(
   await client.start();
 }
 
-export async function activate(
-  context: vscode.ExtensionContext
-): Promise<void> {
+export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('GN');
   context.subscriptions.push(output);
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(updateActiveEditorContext)
   );
-  await updateActiveEditorContext();
+  void updateActiveEditorContext();
 
   context.subscriptions.push(
     vscode.commands.registerCommand('gn.openBuildFile', openBuildFile)
   );
 
-  await startLanguageServer(context, output);
+  void startLanguageServer(context, output);
 }

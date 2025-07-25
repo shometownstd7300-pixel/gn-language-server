@@ -16,7 +16,6 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "workspaceContains:**/.gn",
     "workspaceContains:**/BUILD.gn"
   ],
   "contributes": {
