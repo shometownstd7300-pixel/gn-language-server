@@ -39,6 +39,10 @@ pub trait Node<'i> {
         None
     }
 
+    fn walk<'n>(&'n self) -> Walk<'i, 'n> {
+        Walk::new(self.as_node())
+    }
+
     fn identifiers<'n>(&'n self) -> FilterWalk<'i, 'n, &'n Identifier<'i>> {
         FilterWalk::new(self.as_node(), |node| node.as_identifier())
     }

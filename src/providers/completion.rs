@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, path::Path};
 
 use itertools::Itertools;
 use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, Documentation,
-    MarkupContent, MarkupKind,
+    Command, CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
+    Documentation, MarkupContent, MarkupKind,
 };
 
 use crate::{
-    ast::{Node, Statement},
+    ast::{Block, Node, Statement},
     builtins::BUILTINS,
 };
 
@@ -36,6 +36,53 @@ fn is_after_dot(data: &str, offset: usize) -> bool {
         }
     }
     false
+}
+
+fn get_prefix_string_for_completion<'i>(ast_root: &Block<'i>, offset: usize) -> Option<&'i str> {
+    ast_root
+        .walk()
+        .filter_map(|node| {
+            if let Some(string) = node.as_string() {
+                if string.span.start() < offset && offset < string.span.end() {
+                    return Some(&string.raw_value[0..(offset - string.span.start() - 1)]);
+                }
+            }
+            None
+        })
+        .next()
+}
+
+fn build_filename_completions(path: &Path, prefix: &str) -> Option<Vec<CompletionItem>> {
+    let current_dir = path.parent()?;
+    let components: Vec<&str> = prefix.split(std::path::MAIN_SEPARATOR).collect();
+    let (basename_prefix, subdirs) = components.split_last().unwrap();
+    let complete_dir = current_dir.join(subdirs.join(std::path::MAIN_SEPARATOR_STR));
+    Some(
+        std::fs::read_dir(&complete_dir)
+            .ok()?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let basename = entry.file_name().to_str()?.to_string();
+                basename.strip_prefix(basename_prefix)?;
+                let is_dir = entry.file_type().ok()?.is_dir();
+                let type_suffix = if is_dir {
+                    std::path::MAIN_SEPARATOR_STR
+                } else {
+                    ""
+                };
+                Some(CompletionItem {
+                    label: format!("{basename}{type_suffix}"),
+                    kind: Some(CompletionItemKind::FILE),
+                    command: is_dir.then_some(Command {
+                        command: "editor.action.triggerSuggest".to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            })
+            .sorted_by_key(|item| item.label.clone())
+            .collect(),
+    )
 }
 
 pub async fn completion(
@@ -67,6 +114,23 @@ pub async fn completion(
         .offset(params.text_document_position.position)
         .unwrap_or(0);
 
+    // Handle string completions.
+    if let Some(prefix) = get_prefix_string_for_completion(&current_file.ast_root, offset) {
+        // Target completions are not supported yet.
+        if prefix.starts_with('/')
+            || prefix.starts_with(':')
+            || prefix.starts_with(std::path::MAIN_SEPARATOR)
+        {
+            return Ok(None);
+        }
+        if let Some(items) = build_filename_completions(&current_file.document.path, prefix) {
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+        return Ok(None);
+    }
+
+    // Handle identifier completions.
+    // If the cursor is after a dot, we can't make suggestions.
     if is_after_dot(&current_file.document.data, offset) {
         return Ok(None);
     }
