@@ -739,14 +739,12 @@ impl<'i> Node<'i> for UnmatchedBrace<'i> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ErrorPrimaryExpr<'i> {
-    OpenString(Box<OpenStringLiteral<'i>>),
     MissingComma(Box<MissingComma<'i>>),
 }
 
 impl ErrorPrimaryExpr<'_> {
     pub fn diagnosis(&self) -> &'static str {
         match self {
-            ErrorPrimaryExpr::OpenString(open_string) => open_string.diagnosis(),
             ErrorPrimaryExpr::MissingComma(missing_comma) => missing_comma.diagnosis(),
         }
     }
@@ -763,42 +761,14 @@ impl<'i> Node<'i> for ErrorPrimaryExpr<'i> {
 
     fn children(&self) -> Vec<&dyn Node<'i>> {
         match self {
-            ErrorPrimaryExpr::OpenString(open_string) => open_string.children(),
             ErrorPrimaryExpr::MissingComma(missing_comma) => missing_comma.children(),
         }
     }
 
     fn span(&self) -> Span<'i> {
         match self {
-            ErrorPrimaryExpr::OpenString(open_string) => open_string.span,
             ErrorPrimaryExpr::MissingComma(missing_comma) => missing_comma.span,
         }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct OpenStringLiteral<'i> {
-    pub text: &'i str,
-    pub span: Span<'i>,
-}
-
-impl OpenStringLiteral<'_> {
-    pub fn diagnosis(&self) -> &'static str {
-        "Open string literal"
-    }
-}
-
-impl<'i> Node<'i> for OpenStringLiteral<'i> {
-    fn as_node(&self) -> &dyn Node<'i> {
-        self
-    }
-
-    fn children(&self) -> Vec<&dyn Node<'i>> {
-        Vec::new()
-    }
-
-    fn span(&self) -> Span<'i> {
-        self.span
     }
 }
 

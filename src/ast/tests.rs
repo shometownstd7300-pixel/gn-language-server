@@ -105,18 +105,3 @@ fn missing_comma() {
         .collect();
     assert_eq!(errors, [(9, 9)]);
 }
-
-#[test]
-fn open_string() {
-    let block = parse(
-        r#"
-a = [
-  "aaa",
-  "bb
-  "ccc",
-]
-"#,
-    );
-    let errors: Vec<_> = block.errors().map(|e| e.span().as_str()).collect();
-    assert_eq!(errors, ["\"bb\n", ""]);
-}
