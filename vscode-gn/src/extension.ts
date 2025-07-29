@@ -27,6 +27,21 @@ import {
 
 const EXECUTABLE_SUFFIX: string = process.platform === 'win32' ? '.exe' : '';
 
+function reportAsyncError(
+  output: vscode.OutputChannel,
+  result: Promise<void>
+): void {
+  void result.catch(err => {
+    if (err instanceof Error) {
+      output.appendLine(err.stack ?? err.message);
+      void vscode.window.showErrorMessage(`Error: ${err.message}`);
+    } else {
+      output.appendLine(String(err));
+      void vscode.window.showErrorMessage(`Error: ${err}`);
+    }
+  });
+}
+
 function ancestors(uri: vscode.Uri): vscode.Uri[] {
   const ancestors = [];
   let current = uri;
@@ -181,13 +196,15 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(output);
 
   context.subscriptions.push(
-    vscode.window.onDidChangeActiveTextEditor(updateActiveEditorContext)
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      reportAsyncError(output, updateActiveEditorContext());
+    })
   );
-  void updateActiveEditorContext();
+  reportAsyncError(output, updateActiveEditorContext());
 
   context.subscriptions.push(
     vscode.commands.registerCommand('gn.openBuildFile', openBuildFile)
   );
 
-  void startLanguageServer(context, output);
+  reportAsyncError(output, startLanguageServer(context, output));
 }
