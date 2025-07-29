@@ -37,6 +37,7 @@ pub mod formatting;
 pub mod goto_definition;
 pub mod hover;
 pub mod indexing;
+pub mod references;
 
 pub type RpcResult<T> = tower_lsp::jsonrpc::Result<T>;
 

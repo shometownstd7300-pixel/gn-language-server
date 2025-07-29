@@ -23,7 +23,7 @@ use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
-    ast::{parse, Block, Comments, Statement},
+    ast::{parse, Block, Call, Comments, Statement},
     storage::{Document, DocumentStorage},
 };
 
@@ -115,7 +115,7 @@ impl ShallowAnalyzedFile {
 pub struct ShallowAnalyzedBlock<'i, 'p> {
     pub scope: AnalyzedScope<'i, 'p>,
     pub templates: HashSet<AnalyzedTemplate<'i>>,
-    pub targets: HashSet<AnalyzedTarget<'i>>,
+    pub targets: HashSet<AnalyzedTarget<'i, 'p>>,
 }
 
 impl ShallowAnalyzedBlock<'_, '_> {
@@ -255,7 +255,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         templates
     }
 
-    pub fn targets_at(&'i self, pos: usize) -> HashSet<&'i AnalyzedTarget<'i>> {
+    pub fn targets_at(&'i self, pos: usize) -> HashSet<&'i AnalyzedTarget<'i, 'p>> {
         let mut targets = HashSet::new();
         for event in &self.events {
             match event {
@@ -343,7 +343,7 @@ pub enum AnalyzedEvent<'i, 'p> {
     DeclareArgs(AnalyzedBlock<'i, 'p>),
     Assignment(AnalyzedAssignment<'i, 'p>),
     Template(AnalyzedTemplate<'i>),
-    Target(AnalyzedTarget<'i>),
+    Target(AnalyzedTarget<'i, 'p>),
     NewScope(AnalyzedBlock<'i, 'p>),
 }
 
@@ -430,13 +430,15 @@ pub struct AnalyzedTemplate<'i> {
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-pub struct AnalyzedTarget<'i> {
+pub struct AnalyzedTarget<'i, 'p> {
     pub name: &'i str,
+    pub call: &'p Call<'i>,
     pub document: &'i Document,
     pub header: Span<'i>,
     pub span: Span<'i>,
 }
 
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub enum Link<'i> {
     /// Link to a file. No range is specified.
     File { path: PathBuf, span: Span<'i> },

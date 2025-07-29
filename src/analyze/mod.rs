@@ -237,6 +237,14 @@ impl Analyzer {
         self.analyze_cached(path)
     }
 
+    pub fn cached_files(&self) -> Vec<Pin<Arc<AnalyzedFile>>> {
+        self.cache
+            .values()
+            .flat_map(|workspace_cache| workspace_cache.files.values())
+            .cloned()
+            .collect()
+    }
+
     fn workspace_cache_for(&mut self, path: &Path) -> std::io::Result<&mut WorkspaceCache> {
         let workspace_root = find_workspace_root(path)?;
         let dot_gn_path = workspace_root.join(".gn");
@@ -489,6 +497,7 @@ impl Analyzer {
                                 {
                                     events.push(AnalyzedEvent::Target(AnalyzedTarget {
                                         name,
+                                        call,
                                         document,
                                         header: call.args[0].span(),
                                         span: call.span,

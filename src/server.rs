@@ -26,8 +26,8 @@ use tower_lsp::{
         DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
         DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
         Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-        InitializedParams, MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability,
-        TextDocumentSyncKind, TextEdit,
+        InitializedParams, Location, MessageType, OneOf, ReferenceParams, ServerCapabilities,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
     },
     LanguageServer, LspService, Server,
 };
@@ -78,6 +78,7 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions::default()),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -160,6 +161,10 @@ impl LanguageServer for Backend {
 
     async fn completion(&self, params: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
         crate::providers::completion::completion(&self.context, params).await
+    }
+
+    async fn references(&self, params: ReferenceParams) -> RpcResult<Option<Vec<Location>>> {
+        crate::providers::references::references(&self.context, params).await
     }
 
     async fn formatting(

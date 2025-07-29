@@ -260,6 +260,7 @@ impl ShallowAnalyzer {
                         {
                             analyzed_block.targets.insert(AnalyzedTarget {
                                 name,
+                                call,
                                 document,
                                 header: call.args[0].span(),
                                 span: call.span,
