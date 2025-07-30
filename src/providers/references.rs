@@ -89,13 +89,7 @@ pub async fn references(
     params: ReferenceParams,
 ) -> RpcResult<Option<Vec<Location>>> {
     // Require background indexing.
-    if !context
-        .client
-        .configurations()
-        .await
-        .experimental
-        .background_indexing
-    {
+    if !context.client.configurations().await.background_indexing {
         return Ok(None);
     }
 

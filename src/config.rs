@@ -14,18 +14,32 @@
 
 use std::path::PathBuf;
 
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+fn default_true() -> bool {
+    true
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Configurations {
     pub binary_path: Option<PathBuf>,
+    #[serde(default = "default_true")]
+    pub background_indexing: bool,
+    #[serde(default = "default_true")]
+    pub error_reporting: bool,
     pub experimental: ExperimentalConfigurations,
+}
+
+impl Default for Configurations {
+    fn default() -> Self {
+        Self {
+            binary_path: Default::default(),
+            background_indexing: true,
+            error_reporting: true,
+            experimental: Default::default(),
+        }
+    }
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExperimentalConfigurations {
-    #[serde(default)]
-    pub background_indexing: bool,
-    #[serde(default)]
-    pub error_reporting: bool,
-}
+pub struct ExperimentalConfigurations {}

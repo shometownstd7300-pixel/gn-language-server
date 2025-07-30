@@ -28,7 +28,7 @@ pub async fn did_change_configuration(
     let documents = context.storage.lock().unwrap().memory_docs();
 
     let mut tasks = Vec::new();
-    if config.experimental.error_reporting {
+    if config.error_reporting {
         for document in documents {
             tasks.push(
                 async move {

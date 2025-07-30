@@ -68,15 +68,15 @@
           "default": null,
           "description": "Path to the GN binary. If unset, it is auto-detected."
         },
-        "gn.experimental.backgroundIndexing": {
+        "gn.backgroundIndexing": {
           "type": "boolean",
-          "default": false,
-          "description": "Enables background indexing (experimental)."
+          "default": true,
+          "description": "Enables background indexing."
         },
-        "gn.experimental.errorReporting": {
+        "gn.errorReporting": {
           "type": "boolean",
-          "default": false,
-          "description": "Reports syntax errors (experimental)."
+          "default": true,
+          "description": "Reports syntax errors."
         },
         "gn.trace.server": {
           "type": "string",

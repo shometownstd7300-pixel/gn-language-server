@@ -144,7 +144,7 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let context = self.context.request();
         let configurations = self.context.client.configurations().await;
-        if configurations.experimental.background_indexing {
+        if configurations.background_indexing {
             if let Ok(path) = params.text_document.uri.to_file_path() {
                 if let Ok(workspace_root) = find_workspace_root(&path) {
                     let workspace_root = workspace_root.to_path_buf();

@@ -22,7 +22,7 @@ pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
     };
 
     let config = context.client.configurations().await;
-    if !config.experimental.error_reporting {
+    if !config.error_reporting {
         return;
     }
 

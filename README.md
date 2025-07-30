@@ -9,9 +9,11 @@ the build configuration language used in Chromium, Fuchsia, and other projects.
 ## Features
 
 - Syntax highlighting
+- Syntax error reporting
 - Context-aware completion
 - Hover documentation
 - Go to definition
+- Finding target references
 - Following imports
 - Following dependencies
 - Sticky scroll with useful lines
