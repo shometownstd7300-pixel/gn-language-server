@@ -14,14 +14,16 @@
 
 use std::borrow::Cow;
 
-use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
+use tower_lsp::lsp_types::{Location, Position, ReferenceParams, Url};
 
-use crate::analyze::{AnalyzedBlock, AnalyzedEvent, Link};
+use crate::analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, Link};
 
 use super::{into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
 
-fn get_target_name_string_at<'i>(root: &AnalyzedBlock<'i, '_>, offset: usize) -> Option<&'i str> {
-    root.top_level_events()
+fn lookup_target_name_string_at<'i>(file: &AnalyzedFile, position: Position) -> Option<&'i str> {
+    let offset = file.document.line_index.offset(position)?;
+    file.analyzed_root
+        .top_level_events()
         .filter_map(|event| match event {
             AnalyzedEvent::Target(target) => Some(target),
             _ => None,
@@ -42,49 +44,11 @@ fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Ve
         .collect()
 }
 
-pub async fn references(
+fn target_references(
     context: &ProviderContext,
-    params: ReferenceParams,
+    current_file: &AnalyzedFile,
+    target_name: &str,
 ) -> RpcResult<Option<Vec<Location>>> {
-    if !context
-        .client
-        .configurations()
-        .await
-        .experimental
-        .background_indexing
-    {
-        return Ok(None);
-    }
-
-    let Ok(path) = params
-        .text_document_position
-        .text_document
-        .uri
-        .to_file_path()
-    else {
-        return Err(new_rpc_error(Cow::from(format!(
-            "invalid file URI: {}",
-            params.text_document_position.text_document.uri
-        ))));
-    };
-
-    let current_file = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .analyze(&path)
-        .map_err(into_rpc_error)?;
-
-    let offset = current_file
-        .document
-        .line_index
-        .offset(params.text_document_position.position)
-        .unwrap_or(0);
-
-    let Some(target_name) = get_target_name_string_at(&current_file.analyzed_root, offset) else {
-        return Ok(None);
-    };
-
     let bad_prefixes = get_overlapping_targets(&current_file.analyzed_root, target_name);
 
     let cached_files = context.analyzer.lock().unwrap().cached_files();
@@ -115,4 +79,47 @@ pub async fn references(
     }
 
     Ok(Some(references))
+}
+
+pub async fn references(
+    context: &ProviderContext,
+    params: ReferenceParams,
+) -> RpcResult<Option<Vec<Location>>> {
+    // Require background indexing.
+    if !context
+        .client
+        .configurations()
+        .await
+        .experimental
+        .background_indexing
+    {
+        return Ok(None);
+    }
+
+    let Ok(path) = params
+        .text_document_position
+        .text_document
+        .uri
+        .to_file_path()
+    else {
+        return Err(new_rpc_error(Cow::from(format!(
+            "invalid file URI: {}",
+            params.text_document_position.text_document.uri
+        ))));
+    };
+
+    let current_file = context
+        .analyzer
+        .lock()
+        .unwrap()
+        .analyze(&path)
+        .map_err(into_rpc_error)?;
+
+    let position = params.text_document_position.position;
+
+    if let Some(target_name) = lookup_target_name_string_at(&current_file, position) {
+        return target_references(context, &current_file, target_name);
+    };
+
+    Ok(None)
 }
