@@ -155,7 +155,7 @@ impl LanguageServer for Backend {
                     if do_index {
                         let context = context.clone();
                         spawn(async move {
-                            crate::providers::indexing::index(&context, &workspace_root).await;
+                            crate::providers::indexing::index(&context, &path).await;
                         });
                     }
                 }

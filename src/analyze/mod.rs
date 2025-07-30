@@ -25,6 +25,7 @@ use dotgn::evaluate_dot_gn;
 use either::Either;
 use pest::Span;
 use shallow::ShallowAnalyzer;
+use tokio::sync::SetOnce;
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::{
@@ -208,15 +209,39 @@ fn collect_symbols(node: &dyn Node, line_index: &LineIndex) -> Vec<DocumentSymbo
     symbols
 }
 
+#[derive(Clone, Default)]
+pub struct WorkspaceIndexing {
+    done: Arc<SetOnce<()>>,
+}
+
+impl WorkspaceIndexing {
+    pub async fn wait(&self) {
+        self.done.wait().await;
+    }
+
+    pub fn mark_done(&mut self) -> bool {
+        self.done.set(()).is_ok()
+    }
+}
+
 pub struct WorkspaceCache {
     dot_gn_version: DocumentVersion,
     context: WorkspaceContext,
     files: BTreeMap<PathBuf, Pin<Arc<AnalyzedFile>>>,
+    indexing: WorkspaceIndexing,
 }
 
 impl WorkspaceCache {
+    pub fn context(&self) -> &WorkspaceContext {
+        &self.context
+    }
+
     pub fn files(&self) -> Vec<Pin<Arc<AnalyzedFile>>> {
         self.files.values().cloned().collect()
+    }
+
+    pub fn indexing(&self) -> WorkspaceIndexing {
+        self.indexing.clone()
     }
 }
 
@@ -280,6 +305,7 @@ impl Analyzer {
             dot_gn_version,
             context,
             files: BTreeMap::new(),
+            indexing: Default::default(),
         };
         Ok(self
             .cache

@@ -118,6 +118,16 @@ pub async fn references(
         .analyze(&path, context.ticket)
         .map_err(into_rpc_error)?;
 
+    // Wait for the background indexing to finish.
+    let indexing = context
+        .analyzer
+        .lock()
+        .unwrap()
+        .workspace_cache_for(&path)
+        .map_err(into_rpc_error)?
+        .indexing();
+    indexing.wait().await;
+
     let position = params.text_document_position.position;
 
     if let Some(target_name) = lookup_target_name_string_at(&current_file, position) {

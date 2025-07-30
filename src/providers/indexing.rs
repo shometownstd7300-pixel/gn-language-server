@@ -28,7 +28,18 @@ async fn index_file(path: &Path, context: &RequestContext) {
     analyzer.analyze(path, context.ticket).ok();
 }
 
-pub async fn index(context: &RequestContext, workspace: &Path) {
+pub async fn index(context: &RequestContext, initiator_path: &Path) {
+    let (workspace, mut indexing) = {
+        let mut analyzer = context.analyzer.lock().unwrap();
+        let Ok(workspace_cache) = analyzer.workspace_cache_for(initiator_path) else {
+            return;
+        };
+        (
+            workspace_cache.context().root.clone(),
+            workspace_cache.indexing(),
+        )
+    };
+
     context
         .client
         .log_message(
@@ -40,7 +51,7 @@ pub async fn index(context: &RequestContext, workspace: &Path) {
     let start_time = Instant::now();
     let mut count = 0;
 
-    let walk = WalkDir::new(workspace)
+    let walk = WalkDir::new(&workspace)
         .into_iter()
         .filter_entry(|entry| !contains_args_gn(entry));
     for entry in walk {
@@ -68,4 +79,6 @@ pub async fn index(context: &RequestContext, workspace: &Path) {
             ),
         )
         .await;
+
+    indexing.mark_done();
 }
