@@ -23,9 +23,10 @@ use tower_lsp::lsp_types::{
 use crate::{
     ast::{Block, Node, Statement},
     builtins::BUILTINS,
+    server::RequestContext,
 };
 
-use super::{into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
+use super::{into_rpc_error, new_rpc_error, RpcResult};
 
 fn is_after_dot(data: &str, offset: usize) -> bool {
     for ch in data[..offset].chars().rev() {
@@ -86,7 +87,7 @@ fn build_filename_completions(path: &Path, prefix: &str) -> Option<Vec<Completio
 }
 
 pub async fn completion(
-    context: &ProviderContext,
+    context: &RequestContext,
     params: CompletionParams,
 ) -> RpcResult<Option<CompletionResponse>> {
     let Ok(path) = params
@@ -105,7 +106,7 @@ pub async fn completion(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path)
+        .analyze(&path, context.ticket)
         .map_err(into_rpc_error)?;
 
     let offset = current_file

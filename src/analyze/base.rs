@@ -16,7 +16,8 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, RwLock},
+    time::{Duration, Instant},
 };
 
 use pest::Span;
@@ -24,8 +25,19 @@ use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
     ast::{parse, Block, Call, Comments, Statement},
-    storage::{Document, DocumentStorage},
+    storage::{Document, DocumentStorage, DocumentVersion},
+    util::CacheTicket,
 };
+
+const CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+pub fn compute_next_check(t: Instant, version: DocumentVersion) -> Instant {
+    match version {
+        DocumentVersion::OnDisk { .. } => t + CHECK_INTERVAL,
+        // Do not skip version checks for in-memory documents.
+        _ => t,
+    }
+}
 
 pub fn find_workspace_root(path: &Path) -> std::io::Result<&Path> {
     for dir in path.ancestors().skip(1) {
@@ -74,6 +86,7 @@ pub struct ShallowAnalyzedFile {
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
     pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
+    pub next_check: RwLock<Instant>,
 }
 
 impl ShallowAnalyzedFile {
@@ -87,27 +100,43 @@ impl ShallowAnalyzedFile {
         let analyzed_root = unsafe {
             std::mem::transmute::<ShallowAnalyzedBlock, ShallowAnalyzedBlock>(analyzed_root)
         };
+        let next_check = RwLock::new(compute_next_check(Instant::now(), document.version));
         Arc::pin(ShallowAnalyzedFile {
             document,
             workspace: workspace.clone(),
             ast_root,
             analyzed_root,
             deps: Vec::new(),
+            next_check,
         })
     }
 
-    pub fn is_fresh(&self, storage: &DocumentStorage) -> std::io::Result<bool> {
-        if self.document.will_check() {
-            let version = storage.read_version(&self.document.path)?;
-            if version != self.document.version {
-                return Ok(false);
-            }
+    pub fn is_fresh(
+        &self,
+        ticket: CacheTicket,
+        storage: &DocumentStorage,
+    ) -> std::io::Result<bool> {
+        if ticket.time() <= *self.next_check.read().unwrap() {
+            return Ok(true);
         }
+
+        let mut next_check = self.next_check.write().unwrap();
+        if ticket.time() <= *next_check {
+            return Ok(true);
+        }
+
+        let version = storage.read_version(&self.document.path)?;
+        if version != self.document.version {
+            return Ok(false);
+        }
+
         for dep in &self.deps {
-            if !dep.is_fresh(storage)? {
+            if !dep.is_fresh(ticket, storage)? {
                 return Ok(false);
             }
         }
+
+        *next_check = compute_next_check(ticket.time(), version);
         Ok(true)
     }
 }
@@ -142,21 +171,36 @@ pub struct AnalyzedFile {
     pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     pub links: Vec<Link<'static>>,
     pub symbols: Vec<DocumentSymbol>,
+    pub next_check: RwLock<Instant>,
 }
 
 impl AnalyzedFile {
-    pub fn is_fresh(&self, storage: &DocumentStorage) -> std::io::Result<bool> {
-        if self.document.will_check() {
-            let version = storage.read_version(&self.document.path)?;
-            if version != self.document.version {
-                return Ok(false);
-            }
+    pub fn is_fresh(
+        &self,
+        ticket: CacheTicket,
+        storage: &DocumentStorage,
+    ) -> std::io::Result<bool> {
+        if ticket.time() <= *self.next_check.read().unwrap() {
+            return Ok(true);
         }
+
+        let mut next_check = self.next_check.write().unwrap();
+        if ticket.time() <= *next_check {
+            return Ok(true);
+        }
+
+        let version = storage.read_version(&self.document.path)?;
+        if version != self.document.version {
+            return Ok(false);
+        }
+
         for dep in &self.deps {
-            if !dep.is_fresh(storage)? {
+            if !dep.is_fresh(ticket, storage)? {
                 return Ok(false);
             }
         }
+
+        *next_check = compute_next_check(ticket.time(), version);
         Ok(true)
     }
 

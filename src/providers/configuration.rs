@@ -15,13 +15,12 @@
 use futures::{future::join_all, FutureExt};
 use tower_lsp::lsp_types::{DidChangeConfigurationParams, Url};
 
-use super::{
-    diagnostics::{publish_diagnostics, unpublish_diagnostics},
-    ProviderContext,
-};
+use crate::server::RequestContext;
+
+use super::diagnostics::{publish_diagnostics, unpublish_diagnostics};
 
 pub async fn did_change_configuration(
-    context: &ProviderContext,
+    context: &RequestContext,
     _params: DidChangeConfigurationParams,
 ) {
     let config = context.client.configurations().await;

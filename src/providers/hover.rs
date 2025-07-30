@@ -20,11 +20,12 @@ use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkedString, Url}
 use crate::{
     ast::{Node, Statement},
     builtins::BUILTINS,
+    server::RequestContext,
 };
 
-use super::{into_rpc_error, lookup_identifier_at, new_rpc_error, ProviderContext, RpcResult};
+use super::{into_rpc_error, lookup_identifier_at, new_rpc_error, RpcResult};
 
-pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<Option<Hover>> {
+pub async fn hover(context: &RequestContext, params: HoverParams) -> RpcResult<Option<Hover>> {
     let Ok(path) = params
         .text_document_position_params
         .text_document
@@ -41,7 +42,7 @@ pub async fn hover(context: &ProviderContext, params: HoverParams) -> RpcResult<
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path)
+        .analyze(&path, context.ticket)
         .map_err(into_rpc_error)?;
 
     let Some(ident) =
@@ -200,7 +201,7 @@ mod tests {
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
 
-        let response = hover(&ProviderContext::new_for_testing(), params)
+        let response = hover(&RequestContext::new_for_testing(), params)
             .await
             .unwrap();
 

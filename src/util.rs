@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Instant;
+
 use pest::Span;
 use tower_lsp::lsp_types::{Position, Range};
 
@@ -77,6 +79,21 @@ impl<'i> LineIndex<'i> {
         } else {
             None
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CacheTicket {
+    t: Instant,
+}
+
+impl CacheTicket {
+    pub fn new() -> Self {
+        Self { t: Instant::now() }
+    }
+
+    pub fn time(self) -> Instant {
+        self.t
     }
 }
 

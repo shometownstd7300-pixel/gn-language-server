@@ -16,9 +16,12 @@ use std::borrow::Cow;
 
 use tower_lsp::lsp_types::{Location, Position, ReferenceParams, Url};
 
-use crate::analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, Link};
+use crate::{
+    analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, Link},
+    server::RequestContext,
+};
 
-use super::{into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
+use super::{into_rpc_error, new_rpc_error, RpcResult};
 
 fn lookup_target_name_string_at<'i>(file: &AnalyzedFile, position: Position) -> Option<&'i str> {
     let offset = file.document.line_index.offset(position)?;
@@ -45,7 +48,7 @@ fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Ve
 }
 
 fn target_references(
-    context: &ProviderContext,
+    context: &RequestContext,
     current_file: &AnalyzedFile,
     target_name: &str,
 ) -> RpcResult<Option<Vec<Location>>> {
@@ -82,7 +85,7 @@ fn target_references(
 }
 
 pub async fn references(
-    context: &ProviderContext,
+    context: &RequestContext,
     params: ReferenceParams,
 ) -> RpcResult<Option<Vec<Location>>> {
     // Require background indexing.
@@ -112,7 +115,7 @@ pub async fn references(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path)
+        .analyze(&path, context.ticket)
         .map_err(into_rpc_error)?;
 
     let position = params.text_document_position.position;

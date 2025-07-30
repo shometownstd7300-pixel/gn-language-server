@@ -16,9 +16,9 @@ use std::{borrow::Cow, path::PathBuf};
 
 use tower_lsp::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 
-use crate::analyze::Link;
+use crate::{analyze::Link, server::RequestContext};
 
-use super::{find_target_position, into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
+use super::{find_target_position, into_rpc_error, new_rpc_error, RpcResult};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TargetLinkData {
@@ -27,7 +27,7 @@ struct TargetLinkData {
 }
 
 pub async fn document_link(
-    context: &ProviderContext,
+    context: &RequestContext,
     params: DocumentLinkParams,
 ) -> RpcResult<Option<Vec<DocumentLink>>> {
     let Ok(path) = params.text_document.uri.to_file_path() else {
@@ -41,7 +41,7 @@ pub async fn document_link(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path)
+        .analyze(&path, context.ticket)
         .map_err(into_rpc_error)?;
 
     let links = current_file
@@ -73,7 +73,7 @@ pub async fn document_link(
 }
 
 pub async fn document_link_resolve(
-    context: &ProviderContext,
+    context: &RequestContext,
     mut link: DocumentLink,
 ) -> RpcResult<DocumentLink> {
     let Some(data) = link
@@ -88,7 +88,7 @@ pub async fn document_link_resolve(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&data.path)
+        .analyze(&data.path, context.ticket)
         .map_err(into_rpc_error)?;
 
     let position = find_target_position(&target_file, &data.name).unwrap_or_default();

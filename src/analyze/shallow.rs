@@ -17,20 +17,21 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
+    time::Instant,
 };
 
 use either::Either;
 
 use crate::{
     analyze::base::{
-        AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedBlock,
-        ShallowAnalyzedFile, WorkspaceContext,
+        compute_next_check, AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate,
+        ShallowAnalyzedBlock, ShallowAnalyzedFile, WorkspaceContext,
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     storage::{Document, DocumentStorage},
-    util::parse_simple_literal,
+    util::{parse_simple_literal, CacheTicket},
 };
 
 fn is_exported(name: &str) -> bool {
@@ -80,25 +81,27 @@ impl ShallowAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
+        ticket: CacheTicket,
     ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
-        self.analyze_cached(path, workspace, &mut Vec::new())
+        self.analyze_cached(path, workspace, ticket, &mut Vec::new())
     }
 
     fn analyze_cached(
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
+        ticket: CacheTicket,
         visiting: &mut Vec<PathBuf>,
     ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if let Some(cached_file) = self.cache.get(path) {
             if &cached_file.workspace == workspace
-                && cached_file.is_fresh(&self.storage.lock().unwrap())?
+                && cached_file.is_fresh(ticket, &self.storage.lock().unwrap())?
             {
                 return Ok(cached_file.clone());
             }
         }
 
-        let new_file = self.analyze_uncached(path, workspace, visiting)?;
+        let new_file = self.analyze_uncached(path, workspace, ticket, visiting)?;
         self.cache.insert(path.to_path_buf(), new_file.clone());
 
         Ok(new_file)
@@ -108,6 +111,7 @@ impl ShallowAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
+        ticket: CacheTicket,
         visiting: &mut Vec<PathBuf>,
     ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if visiting.iter().any(|p| p == path) {
@@ -118,7 +122,7 @@ impl ShallowAnalyzer {
         }
 
         visiting.push(path.to_path_buf());
-        let result = self.analyze_uncached_inner(path, workspace, visiting);
+        let result = self.analyze_uncached_inner(path, workspace, ticket, visiting);
         visiting.pop();
         result
     }
@@ -127,6 +131,7 @@ impl ShallowAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
+        ticket: CacheTicket,
         visiting: &mut Vec<PathBuf>,
     ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
         let document = match self.storage.lock().unwrap().read(path) {
@@ -140,7 +145,7 @@ impl ShallowAnalyzer {
         let ast_root = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
         let analyzed_root =
-            self.analyze_block(&ast_root, workspace, &document, &mut deps, visiting)?;
+            self.analyze_block(&ast_root, workspace, ticket, &document, &mut deps, visiting)?;
 
         // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
         let analyzed_root = unsafe {
@@ -148,6 +153,7 @@ impl ShallowAnalyzer {
         };
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
+        let next_check = RwLock::new(compute_next_check(Instant::now(), document.version));
 
         Ok(Arc::pin(ShallowAnalyzedFile {
             document,
@@ -155,6 +161,7 @@ impl ShallowAnalyzer {
             ast_root,
             analyzed_root,
             deps,
+            next_check,
         }))
     }
 
@@ -162,6 +169,7 @@ impl ShallowAnalyzer {
         &mut self,
         block: &'p Block<'i>,
         workspace: &WorkspaceContext,
+        ticket: CacheTicket,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
         visiting: &mut Vec<PathBuf>,
@@ -195,7 +203,7 @@ impl ShallowAnalyzer {
                         {
                             let path =
                                 workspace.resolve_path(name, document.path.parent().unwrap());
-                            let file = self.analyze_cached(&path, workspace, visiting)?;
+                            let file = self.analyze_cached(&path, workspace, ticket, visiting)?;
                             analyzed_block.merge(&file.analyzed_root);
                             deps.push(file);
                         }
@@ -219,9 +227,9 @@ impl ShallowAnalyzer {
                     }
                     DECLARE_ARGS | FOREACH => {
                         if let Some(block) = &call.block {
-                            analyzed_block.merge(
-                                &self.analyze_block(block, workspace, document, deps, visiting)?,
-                            );
+                            analyzed_block.merge(&self.analyze_block(
+                                block, workspace, ticket, document, deps, visiting,
+                            )?);
                         }
                     }
                     SET_DEFAULTS => {}
@@ -274,6 +282,7 @@ impl ShallowAnalyzer {
                         analyzed_block.merge(&self.analyze_block(
                             &current_condition.then_block,
                             workspace,
+                            ticket,
                             document,
                             deps,
                             visiting,
@@ -284,11 +293,9 @@ impl ShallowAnalyzer {
                                 current_condition = next_condition;
                             }
                             Some(Either::Right(block)) => {
-                                analyzed_block.merge(
-                                    &self.analyze_block(
-                                        block, workspace, document, deps, visiting,
-                                    )?,
-                                );
+                                analyzed_block.merge(&self.analyze_block(
+                                    block, workspace, ticket, document, deps, visiting,
+                                )?);
                                 break;
                             }
                         }

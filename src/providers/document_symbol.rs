@@ -16,10 +16,12 @@ use std::borrow::Cow;
 
 use tower_lsp::lsp_types::{DocumentSymbolParams, DocumentSymbolResponse};
 
-use super::{into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
+use crate::server::RequestContext;
+
+use super::{into_rpc_error, new_rpc_error, RpcResult};
 
 pub async fn document_symbol(
-    context: &ProviderContext,
+    context: &RequestContext,
     params: DocumentSymbolParams,
 ) -> RpcResult<Option<DocumentSymbolResponse>> {
     let Ok(path) = params.text_document.uri.to_file_path() else {
@@ -33,7 +35,7 @@ pub async fn document_symbol(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path)
+        .analyze(&path, context.ticket)
         .map_err(into_rpc_error)?;
 
     Ok(Some(DocumentSymbolResponse::Nested(

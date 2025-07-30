@@ -21,12 +21,12 @@ use tokio::{
 };
 use tower_lsp::lsp_types::{DocumentFormattingParams, TextEdit};
 
-use crate::{analyze::find_workspace_root, binary::find_gn_binary};
+use crate::{analyze::find_workspace_root, binary::find_gn_binary, server::RequestContext};
 
-use super::{into_rpc_error, new_rpc_error, ProviderContext, RpcResult};
+use super::{into_rpc_error, new_rpc_error, RpcResult};
 
 pub async fn formatting(
-    context: &ProviderContext,
+    context: &RequestContext,
     params: DocumentFormattingParams,
 ) -> RpcResult<Option<Vec<TextEdit>>> {
     let Ok(file_path) = params.text_document.uri.to_file_path() else {

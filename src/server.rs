@@ -35,12 +35,57 @@ use tower_lsp::{
 use crate::{
     analyze::{find_workspace_root, Analyzer},
     client::TestableClient,
-    providers::{ProviderContext, RpcResult},
+    providers::RpcResult,
     storage::DocumentStorage,
+    util::CacheTicket,
 };
 
+#[derive(Clone)]
+pub struct ServerContext {
+    pub storage: Arc<Mutex<DocumentStorage>>,
+    pub analyzer: Arc<Mutex<Analyzer>>,
+    pub client: TestableClient,
+}
+
+impl ServerContext {
+    #[cfg(test)]
+    pub fn new_for_testing() -> Self {
+        let storage = Arc::new(Mutex::new(DocumentStorage::new()));
+        let analyzer = Arc::new(Mutex::new(Analyzer::new(&storage)));
+        Self {
+            storage,
+            analyzer,
+            client: TestableClient::new_for_testing(),
+        }
+    }
+
+    pub fn request(&self) -> RequestContext {
+        RequestContext {
+            storage: self.storage.clone(),
+            analyzer: self.analyzer.clone(),
+            client: self.client.clone(),
+            ticket: CacheTicket::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RequestContext {
+    pub storage: Arc<Mutex<DocumentStorage>>,
+    pub analyzer: Arc<Mutex<Analyzer>>,
+    pub client: TestableClient,
+    pub ticket: CacheTicket,
+}
+
+impl RequestContext {
+    #[cfg(test)]
+    pub fn new_for_testing() -> Self {
+        ServerContext::new_for_testing().request()
+    }
+}
+
 struct Backend {
-    context: ProviderContext,
+    context: ServerContext,
     indexed_workspaces: Mutex<HashSet<PathBuf>>,
 }
 
@@ -51,7 +96,7 @@ impl Backend {
         client: TestableClient,
     ) -> Self {
         Self {
-            context: ProviderContext {
+            context: ServerContext {
                 storage: storage.clone(),
                 analyzer: analyzer.clone(),
                 client,
@@ -97,6 +142,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let context = self.context.request();
         let configurations = self.context.client.configurations().await;
         if configurations.experimental.background_indexing {
             if let Ok(path) = params.text_document.uri.to_file_path() {
@@ -107,7 +153,7 @@ impl LanguageServer for Backend {
                         indexed_workspaces.insert(workspace_root.clone())
                     };
                     if do_index {
-                        let context = self.context.clone();
+                        let context = context.clone();
                         spawn(async move {
                             crate::providers::indexing::index(&context, &workspace_root).await;
                         });
@@ -115,63 +161,64 @@ impl LanguageServer for Backend {
                 }
             };
         }
-        crate::providers::document::did_open(&self.context, params).await;
+        crate::providers::document::did_open(&context, params).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        crate::providers::document::did_change(&self.context, params).await;
+        crate::providers::document::did_change(&self.context.request(), params).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        crate::providers::document::did_close(&self.context, params).await;
+        crate::providers::document::did_close(&self.context.request(), params).await;
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
-        crate::providers::configuration::did_change_configuration(&self.context, params).await;
+        crate::providers::configuration::did_change_configuration(&self.context.request(), params)
+            .await;
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> RpcResult<Option<GotoDefinitionResponse>> {
-        crate::providers::goto_definition::goto_definition(&self.context, params).await
+        crate::providers::goto_definition::goto_definition(&self.context.request(), params).await
     }
 
     async fn hover(&self, params: HoverParams) -> RpcResult<Option<Hover>> {
-        crate::providers::hover::hover(&self.context, params).await
+        crate::providers::hover::hover(&self.context.request(), params).await
     }
 
     async fn document_link(
         &self,
         params: DocumentLinkParams,
     ) -> RpcResult<Option<Vec<DocumentLink>>> {
-        crate::providers::document_link::document_link(&self.context, params).await
+        crate::providers::document_link::document_link(&self.context.request(), params).await
     }
 
     async fn document_link_resolve(&self, link: DocumentLink) -> RpcResult<DocumentLink> {
-        crate::providers::document_link::document_link_resolve(&self.context, link).await
+        crate::providers::document_link::document_link_resolve(&self.context.request(), link).await
     }
 
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> RpcResult<Option<DocumentSymbolResponse>> {
-        crate::providers::document_symbol::document_symbol(&self.context, params).await
+        crate::providers::document_symbol::document_symbol(&self.context.request(), params).await
     }
 
     async fn completion(&self, params: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
-        crate::providers::completion::completion(&self.context, params).await
+        crate::providers::completion::completion(&self.context.request(), params).await
     }
 
     async fn references(&self, params: ReferenceParams) -> RpcResult<Option<Vec<Location>>> {
-        crate::providers::references::references(&self.context, params).await
+        crate::providers::references::references(&self.context.request(), params).await
     }
 
     async fn formatting(
         &self,
         params: DocumentFormattingParams,
     ) -> RpcResult<Option<Vec<TextEdit>>> {
-        crate::providers::formatting::formatting(&self.context, params).await
+        crate::providers::formatting::formatting(&self.context.request(), params).await
     }
 }
 

@@ -17,13 +17,11 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, RwLock},
-    time::{Duration, Instant, SystemTime},
+    sync::Arc,
+    time::SystemTime,
 };
 
 use crate::util::LineIndex;
-
-const CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DocumentVersion {
@@ -36,7 +34,6 @@ pub struct Document {
     pub path: PathBuf,
     pub data: Pin<String>,
     pub version: DocumentVersion,
-    pub last_checked: RwLock<Instant>,
     pub line_index: LineIndex<'static>,
 }
 
@@ -50,31 +47,12 @@ impl Document {
             path: path.to_path_buf(),
             data,
             version,
-            last_checked: RwLock::new(Instant::now()),
             line_index,
         }
     }
 
     pub fn empty(path: &Path) -> Self {
         Self::new(path, String::new(), DocumentVersion::Missing)
-    }
-
-    pub fn need_check(&self) -> bool {
-        if matches!(self.version, DocumentVersion::OnDisk { .. }) {
-            self.last_checked.read().unwrap().elapsed() >= CHECK_INTERVAL
-        } else {
-            // In-memory documents are cheap to check.
-            true
-        }
-    }
-
-    pub fn will_check(&self) -> bool {
-        if self.need_check() {
-            *self.last_checked.write().unwrap() = Instant::now();
-            true
-        } else {
-            false
-        }
     }
 }
 

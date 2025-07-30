@@ -12,19 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    borrow::Cow,
-    sync::{Arc, Mutex},
-};
+use std::borrow::Cow;
 
 use itertools::Itertools;
 use tower_lsp::lsp_types::Position;
 
 use crate::{
-    analyze::{AnalyzedFile, Analyzer},
+    analyze::AnalyzedFile,
     ast::{Identifier, Node},
-    client::TestableClient,
-    storage::DocumentStorage,
 };
 
 pub mod completion;
@@ -40,26 +35,6 @@ pub mod indexing;
 pub mod references;
 
 pub type RpcResult<T> = tower_lsp::jsonrpc::Result<T>;
-
-#[derive(Clone)]
-pub struct ProviderContext {
-    pub storage: Arc<Mutex<DocumentStorage>>,
-    pub analyzer: Arc<Mutex<Analyzer>>,
-    pub client: TestableClient,
-}
-
-impl ProviderContext {
-    #[cfg(test)]
-    pub fn new_for_testing() -> Self {
-        let storage = Arc::new(Mutex::new(DocumentStorage::new()));
-        let analyzer = Arc::new(Mutex::new(Analyzer::new(&storage)));
-        Self {
-            storage,
-            analyzer,
-            client: TestableClient::new_for_testing(),
-        }
-    }
-}
 
 pub fn new_rpc_error(message: Cow<'static, str>) -> tower_lsp::jsonrpc::Error {
     tower_lsp::jsonrpc::Error {

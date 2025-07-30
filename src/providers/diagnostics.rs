@@ -14,11 +14,9 @@
 
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Url};
 
-use crate::{ast::Node, storage::DocumentVersion};
+use crate::{ast::Node, server::RequestContext, storage::DocumentVersion};
 
-use super::ProviderContext;
-
-pub async fn publish_diagnostics(context: &ProviderContext, uri: &Url) {
+pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
     let Ok(path) = uri.to_file_path() else {
         return;
     };
@@ -28,7 +26,12 @@ pub async fn publish_diagnostics(context: &ProviderContext, uri: &Url) {
         return;
     }
 
-    let Ok(current_file) = context.analyzer.lock().unwrap().analyze(&path) else {
+    let Ok(current_file) = context
+        .analyzer
+        .lock()
+        .unwrap()
+        .analyze(&path, context.ticket)
+    else {
         return;
     };
 
@@ -55,7 +58,7 @@ pub async fn publish_diagnostics(context: &ProviderContext, uri: &Url) {
         .await;
 }
 
-pub async fn unpublish_diagnostics(context: &ProviderContext, uri: &Url) {
+pub async fn unpublish_diagnostics(context: &RequestContext, uri: &Url) {
     context
         .client
         .publish_diagnostics(uri.clone(), Vec::new(), None)

@@ -17,18 +17,18 @@ use std::{path::Path, time::Instant};
 use tower_lsp::lsp_types::MessageType;
 use walkdir::{DirEntry, WalkDir};
 
-use super::ProviderContext;
+use crate::server::RequestContext;
 
 fn contains_args_gn(entry: &DirEntry) -> bool {
     entry.file_type().is_dir() && entry.path().join("args.gn").exists()
 }
 
-async fn index_file(path: &Path, context: &ProviderContext) {
+async fn index_file(path: &Path, context: &RequestContext) {
     let mut analyzer = context.analyzer.lock().unwrap();
-    analyzer.analyze(path).ok();
+    analyzer.analyze(path, context.ticket).ok();
 }
 
-pub async fn index(context: &ProviderContext, workspace: &Path) {
+pub async fn index(context: &RequestContext, workspace: &Path) {
     context
         .client
         .log_message(

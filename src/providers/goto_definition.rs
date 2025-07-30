@@ -18,15 +18,12 @@ use tower_lsp::lsp_types::{
     GotoDefinitionParams, GotoDefinitionResponse, Location, LocationLink, Position, Range, Url,
 };
 
-use crate::{analyze::Link, ast::Node};
+use crate::{analyze::Link, ast::Node, server::RequestContext};
 
-use super::{
-    find_target_position, into_rpc_error, lookup_identifier_at, new_rpc_error, ProviderContext,
-    RpcResult,
-};
+use super::{find_target_position, into_rpc_error, lookup_identifier_at, new_rpc_error, RpcResult};
 
 pub async fn goto_definition(
-    context: &ProviderContext,
+    context: &RequestContext,
     params: GotoDefinitionParams,
 ) -> RpcResult<Option<GotoDefinitionResponse>> {
     let Ok(path) = params
@@ -45,7 +42,7 @@ pub async fn goto_definition(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path)
+        .analyze(&path, context.ticket)
         .map_err(into_rpc_error)?;
 
     // Check links first.
@@ -66,7 +63,7 @@ pub async fn goto_definition(
                         .analyzer
                         .lock()
                         .unwrap()
-                        .analyze(path)
+                        .analyze(path, context.ticket)
                         .map_err(into_rpc_error)?;
                     (
                         path,
