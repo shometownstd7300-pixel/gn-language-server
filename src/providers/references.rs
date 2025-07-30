@@ -54,7 +54,13 @@ fn target_references(
 ) -> RpcResult<Option<Vec<Location>>> {
     let bad_prefixes = get_overlapping_targets(&current_file.analyzed_root, target_name);
 
-    let cached_files = context.analyzer.lock().unwrap().cached_files();
+    let cached_files = context
+        .analyzer
+        .lock()
+        .unwrap()
+        .workspace_cache_for(&current_file.document.path)
+        .map_err(into_rpc_error)?
+        .files();
 
     let mut references: Vec<Location> = Vec::new();
     for file in cached_files {

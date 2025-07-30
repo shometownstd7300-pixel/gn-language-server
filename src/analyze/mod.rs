@@ -208,10 +208,16 @@ fn collect_symbols(node: &dyn Node, line_index: &LineIndex) -> Vec<DocumentSymbo
     symbols
 }
 
-struct WorkspaceCache {
+pub struct WorkspaceCache {
     dot_gn_version: DocumentVersion,
     context: WorkspaceContext,
     files: BTreeMap<PathBuf, Pin<Arc<AnalyzedFile>>>,
+}
+
+impl WorkspaceCache {
+    pub fn files(&self) -> Vec<Pin<Arc<AnalyzedFile>>> {
+        self.files.values().cloned().collect()
+    }
 }
 
 pub struct Analyzer {
@@ -243,15 +249,7 @@ impl Analyzer {
         self.analyze_cached(path, ticket)
     }
 
-    pub fn cached_files(&self) -> Vec<Pin<Arc<AnalyzedFile>>> {
-        self.cache
-            .values()
-            .flat_map(|workspace_cache| workspace_cache.files.values())
-            .cloned()
-            .collect()
-    }
-
-    fn workspace_cache_for(&mut self, path: &Path) -> std::io::Result<&mut WorkspaceCache> {
+    pub fn workspace_cache_for(&mut self, path: &Path) -> std::io::Result<&mut WorkspaceCache> {
         let workspace_root = find_workspace_root(path)?;
         let dot_gn_path = workspace_root.join(".gn");
         let dot_gn_version = {
