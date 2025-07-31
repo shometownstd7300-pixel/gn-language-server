@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-
 use tower_lsp::lsp_types::{Location, Position, ReferenceParams, Url};
 
 use crate::{
     analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, Link},
+    error::{Error, Result},
     server::RequestContext,
 };
-
-use super::{into_rpc_error, new_rpc_error, RpcResult};
 
 fn lookup_target_name_string_at<'i>(file: &AnalyzedFile, position: Position) -> Option<&'i str> {
     let offset = file.document.line_index.offset(position)?;
@@ -51,15 +48,14 @@ fn target_references(
     context: &RequestContext,
     current_file: &AnalyzedFile,
     target_name: &str,
-) -> RpcResult<Option<Vec<Location>>> {
+) -> Result<Option<Vec<Location>>> {
     let bad_prefixes = get_overlapping_targets(&current_file.analyzed_root, target_name);
 
     let cached_files = context
         .analyzer
         .lock()
         .unwrap()
-        .workspace_cache_for(&current_file.document.path)
-        .map_err(into_rpc_error)?
+        .workspace_cache_for(&current_file.document.path)?
         .files();
 
     let mut references: Vec<Location> = Vec::new();
@@ -93,7 +89,7 @@ fn target_references(
 pub async fn references(
     context: &RequestContext,
     params: ReferenceParams,
-) -> RpcResult<Option<Vec<Location>>> {
+) -> Result<Option<Vec<Location>>> {
     // Require background indexing.
     if !context.client.configurations().await.background_indexing {
         return Ok(None);
@@ -105,26 +101,24 @@ pub async fn references(
         .uri
         .to_file_path()
     else {
-        return Err(new_rpc_error(Cow::from(format!(
+        return Err(Error::General(format!(
             "invalid file URI: {}",
             params.text_document_position.text_document.uri
-        ))));
+        )));
     };
 
     let current_file = context
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)
-        .map_err(into_rpc_error)?;
+        .analyze(&path, context.ticket)?;
 
     // Wait for the background indexing to finish.
     let indexing = context
         .analyzer
         .lock()
         .unwrap()
-        .workspace_cache_for(&path)
-        .map_err(into_rpc_error)?
+        .workspace_cache_for(&path)?
         .indexing();
     indexing.wait().await;
 

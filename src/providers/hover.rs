@@ -12,38 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-
 use itertools::Itertools;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkedString, Url};
 
 use crate::{
     ast::{Node, Statement},
     builtins::BUILTINS,
+    error::{Error, Result},
     server::RequestContext,
 };
 
-use super::{into_rpc_error, lookup_identifier_at, new_rpc_error, RpcResult};
+use super::lookup_identifier_at;
 
-pub async fn hover(context: &RequestContext, params: HoverParams) -> RpcResult<Option<Hover>> {
+pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Option<Hover>> {
     let Ok(path) = params
         .text_document_position_params
         .text_document
         .uri
         .to_file_path()
     else {
-        return Err(new_rpc_error(Cow::from(format!(
+        return Err(Error::General(format!(
             "invalid file URI: {}",
             params.text_document_position_params.text_document.uri
-        ))));
+        )));
     };
 
     let current_file = context
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)
-        .map_err(into_rpc_error)?;
+        .analyze(&path, context.ticket)?;
 
     let Some(ident) =
         lookup_identifier_at(&current_file, params.text_document_position_params.position)

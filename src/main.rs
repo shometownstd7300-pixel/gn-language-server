@@ -18,6 +18,7 @@ mod binary;
 mod builtins;
 mod client;
 mod config;
+mod error;
 mod providers;
 mod server;
 mod storage;

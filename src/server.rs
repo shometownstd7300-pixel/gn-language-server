@@ -35,7 +35,7 @@ use tower_lsp::{
 use crate::{
     analyze::{find_workspace_root, Analyzer},
     client::TestableClient,
-    providers::RpcResult,
+    error::RpcResult,
     storage::DocumentStorage,
     util::CacheTicket,
 };
@@ -181,44 +181,53 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> RpcResult<Option<GotoDefinitionResponse>> {
-        crate::providers::goto_definition::goto_definition(&self.context.request(), params).await
+        Ok(
+            crate::providers::goto_definition::goto_definition(&self.context.request(), params)
+                .await?,
+        )
     }
 
     async fn hover(&self, params: HoverParams) -> RpcResult<Option<Hover>> {
-        crate::providers::hover::hover(&self.context.request(), params).await
+        Ok(crate::providers::hover::hover(&self.context.request(), params).await?)
     }
 
     async fn document_link(
         &self,
         params: DocumentLinkParams,
     ) -> RpcResult<Option<Vec<DocumentLink>>> {
-        crate::providers::document_link::document_link(&self.context.request(), params).await
+        Ok(crate::providers::document_link::document_link(&self.context.request(), params).await?)
     }
 
     async fn document_link_resolve(&self, link: DocumentLink) -> RpcResult<DocumentLink> {
-        crate::providers::document_link::document_link_resolve(&self.context.request(), link).await
+        Ok(
+            crate::providers::document_link::document_link_resolve(&self.context.request(), link)
+                .await?,
+        )
     }
 
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> RpcResult<Option<DocumentSymbolResponse>> {
-        crate::providers::document_symbol::document_symbol(&self.context.request(), params).await
+        Ok(
+            crate::providers::document_symbol::document_symbol(&self.context.request(), params)
+                .await?,
+        )
     }
 
     async fn completion(&self, params: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
-        crate::providers::completion::completion(&self.context.request(), params).await
+        Ok(crate::providers::completion::completion(&self.context.request(), params).await?)
     }
 
     async fn references(&self, params: ReferenceParams) -> RpcResult<Option<Vec<Location>>> {
-        crate::providers::references::references(&self.context.request(), params).await
+        Ok(crate::providers::references::references(&self.context.request(), params).await?)
     }
 
     async fn formatting(
         &self,
         params: DocumentFormattingParams,
     ) -> RpcResult<Option<Vec<TextEdit>>> {
-        crate::providers::formatting::formatting(&self.context.request(), params).await
+        Ok(crate::providers::formatting::formatting(&self.context.request(), params).await?)
     }
 }
 

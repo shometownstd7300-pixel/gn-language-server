@@ -17,10 +17,11 @@ use std::path::{Path, PathBuf};
 use crate::{
     analyze::base::resolve_path,
     ast::{parse, AssignOp, LValue, Statement},
+    error::{Error, Result},
     util::{parse_simple_literal, LineIndex},
 };
 
-pub fn evaluate_dot_gn(workspace_root: &Path, input: &str) -> std::io::Result<PathBuf> {
+pub fn evaluate_dot_gn(workspace_root: &Path, input: &str) -> Result<PathBuf> {
     let line_index = LineIndex::new(input);
     let ast_root = parse(input);
 
@@ -38,63 +39,48 @@ pub fn evaluate_dot_gn(workspace_root: &Path, input: &str) -> std::io::Result<Pa
         let position = line_index.position(assignment.span.start());
 
         if assignment.op != AssignOp::Assign {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "{}:{}:{}: buildconfig must be assigned exactly once",
-                    workspace_root.join(".gn").to_string_lossy(),
-                    position.line + 1,
-                    position.character + 1
-                ),
-            ));
+            return Err(Error::General(format!(
+                "{}:{}:{}: buildconfig must be assigned exactly once",
+                workspace_root.join(".gn").to_string_lossy(),
+                position.line + 1,
+                position.character + 1
+            )));
         }
         let Some(string) = assignment.rvalue.as_primary_string() else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "{}:{}:{}: buildconfig is not a simple string",
-                    workspace_root.join(".gn").to_string_lossy(),
-                    position.line + 1,
-                    position.character + 1
-                ),
-            ));
+            return Err(Error::General(format!(
+                "{}:{}:{}: buildconfig is not a simple string",
+                workspace_root.join(".gn").to_string_lossy(),
+                position.line + 1,
+                position.character + 1
+            )));
         };
         let Some(name) = parse_simple_literal(string.raw_value) else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "{}:{}:{}: buildconfig is not a simple string",
-                    workspace_root.join(".gn").to_string_lossy(),
-                    position.line + 1,
-                    position.character + 1
-                ),
-            ));
+            return Err(Error::General(format!(
+                "{}:{}:{}: buildconfig is not a simple string",
+                workspace_root.join(".gn").to_string_lossy(),
+                position.line + 1,
+                position.character + 1
+            )));
         };
 
         if build_config_path
             .replace(resolve_path(name, workspace_root, workspace_root))
             .is_some()
         {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "{}:{}:{}: buildconfig is assigned multiple times",
-                    workspace_root.join(".gn").to_string_lossy(),
-                    position.line + 1,
-                    position.character + 1
-                ),
-            ));
+            return Err(Error::General(format!(
+                "{}:{}:{}: buildconfig is assigned multiple times",
+                workspace_root.join(".gn").to_string_lossy(),
+                position.line + 1,
+                position.character + 1
+            )));
         }
     }
 
     let Some(build_config_path) = build_config_path else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "{}: buildconfig is not assigned directly",
-                workspace_root.join(".gn").to_string_lossy()
-            ),
-        ));
+        return Err(Error::General(format!(
+            "{}: buildconfig is not assigned directly",
+            workspace_root.join(".gn").to_string_lossy()
+        )));
     };
 
     Ok(build_config_path)

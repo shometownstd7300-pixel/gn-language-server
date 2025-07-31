@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{borrow::Cow, path::PathBuf};
+use std::path::PathBuf;
 
 use tower_lsp::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 
-use crate::{analyze::Link, server::RequestContext};
+use crate::{
+    analyze::Link,
+    error::{Error, Result},
+    server::RequestContext,
+};
 
-use super::{find_target_position, into_rpc_error, new_rpc_error, RpcResult};
+use super::find_target_position;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TargetLinkData {
@@ -29,20 +33,19 @@ struct TargetLinkData {
 pub async fn document_link(
     context: &RequestContext,
     params: DocumentLinkParams,
-) -> RpcResult<Option<Vec<DocumentLink>>> {
+) -> Result<Option<Vec<DocumentLink>>> {
     let Ok(path) = params.text_document.uri.to_file_path() else {
-        return Err(new_rpc_error(Cow::from(format!(
+        return Err(Error::General(format!(
             "invalid file URI: {}",
             params.text_document.uri
-        ))));
+        )));
     };
 
     let current_file = context
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)
-        .map_err(into_rpc_error)?;
+        .analyze(&path, context.ticket)?;
 
     let links = current_file
         .links
@@ -75,21 +78,20 @@ pub async fn document_link(
 pub async fn document_link_resolve(
     context: &RequestContext,
     mut link: DocumentLink,
-) -> RpcResult<DocumentLink> {
+) -> Result<DocumentLink> {
     let Some(data) = link
         .data
         .take()
         .and_then(|value| serde_json::from_value::<TargetLinkData>(value).ok())
     else {
-        return Err(new_rpc_error(Cow::from("corrupted target link data")));
+        return Err(Error::General("corrupted target link data".to_string()));
     };
 
     let target_file = context
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&data.path, context.ticket)
-        .map_err(into_rpc_error)?;
+        .analyze(&data.path, context.ticket)?;
 
     let position = find_target_position(&target_file, &data.name).unwrap_or_default();
     let mut uri = Url::from_file_path(&data.path).unwrap();

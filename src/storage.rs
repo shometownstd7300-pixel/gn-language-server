@@ -21,7 +21,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::util::LineIndex;
+use crate::{error::Result, util::LineIndex};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DocumentVersion {
@@ -83,7 +83,7 @@ impl DocumentStorage {
         Default::default()
     }
 
-    pub fn read_version(&self, path: &Path) -> std::io::Result<DocumentVersion> {
+    pub fn read_version(&self, path: &Path) -> Result<DocumentVersion> {
         if let Some(doc) = self.memory_docs.get(path) {
             return Ok(doc.version);
         }
@@ -96,7 +96,7 @@ impl DocumentStorage {
         Ok(DocumentVersion::OnDisk { modified })
     }
 
-    pub fn read(&self, path: &Path) -> std::io::Result<Pin<Arc<Document>>> {
+    pub fn read(&self, path: &Path) -> Result<Pin<Arc<Document>>> {
         if let Some(doc) = self.memory_docs.get(path) {
             return Ok(doc.clone());
         }

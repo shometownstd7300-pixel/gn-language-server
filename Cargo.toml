@@ -21,6 +21,7 @@ pest = "2.7.15"
 pest_derive = "2.7.15"
 serde = "1.0.217"
 serde_json = "1.0.134"
+thiserror = "2.0.12"
 tokio = { version = "1.47.0", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync"] }
 tower-lsp = "0.20.0"
 walkdir = "2.5.0"

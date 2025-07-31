@@ -12,38 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-
 use tower_lsp::lsp_types::{
     GotoDefinitionParams, GotoDefinitionResponse, Location, LocationLink, Position, Range, Url,
 };
 
-use crate::{analyze::Link, ast::Node, server::RequestContext};
+use crate::{
+    analyze::Link,
+    ast::Node,
+    error::{Error, Result},
+    server::RequestContext,
+};
 
-use super::{find_target_position, into_rpc_error, lookup_identifier_at, new_rpc_error, RpcResult};
+use super::{find_target_position, lookup_identifier_at};
 
 pub async fn goto_definition(
     context: &RequestContext,
     params: GotoDefinitionParams,
-) -> RpcResult<Option<GotoDefinitionResponse>> {
+) -> Result<Option<GotoDefinitionResponse>> {
     let Ok(path) = params
         .text_document_position_params
         .text_document
         .uri
         .to_file_path()
     else {
-        return Err(new_rpc_error(Cow::from(format!(
+        return Err(Error::General(format!(
             "invalid file URI: {}",
             params.text_document_position_params.text_document.uri
-        ))));
+        )));
     };
 
     let current_file = context
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)
-        .map_err(into_rpc_error)?;
+        .analyze(&path, context.ticket)?;
 
     // Check links first.
     if let Some(offset) = current_file
@@ -63,8 +65,7 @@ pub async fn goto_definition(
                         .analyzer
                         .lock()
                         .unwrap()
-                        .analyze(path, context.ticket)
-                        .map_err(into_rpc_error)?;
+                        .analyze(path, context.ticket)?;
                     (
                         path,
                         find_target_position(&target_file, name).unwrap_or_default(),

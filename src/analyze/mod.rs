@@ -14,7 +14,6 @@
 
 use std::{
     collections::BTreeMap,
-    io::ErrorKind,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex, RwLock},
@@ -32,6 +31,7 @@ use crate::{
     analyze::base::compute_next_check,
     ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
+    error::{Error, Result},
     storage::{Document, DocumentStorage, DocumentVersion},
     util::{parse_simple_literal, CacheTicket, LineIndex},
 };
@@ -260,21 +260,14 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(
-        &mut self,
-        path: &Path,
-        ticket: CacheTicket,
-    ) -> std::io::Result<Pin<Arc<AnalyzedFile>>> {
+    pub fn analyze(&mut self, path: &Path, ticket: CacheTicket) -> Result<Pin<Arc<AnalyzedFile>>> {
         if !path.is_absolute() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Path must be absolute",
-            ));
+            return Err(Error::General("Path must be absolute".to_string()));
         }
         self.analyze_cached(path, ticket)
     }
 
-    pub fn workspace_cache_for(&mut self, path: &Path) -> std::io::Result<&mut WorkspaceCache> {
+    pub fn workspace_cache_for(&mut self, path: &Path) -> Result<&mut WorkspaceCache> {
         let workspace_root = find_workspace_root(path)?;
         let dot_gn_path = workspace_root.join(".gn");
         let dot_gn_version = {
@@ -317,7 +310,7 @@ impl Analyzer {
         &mut self,
         path: &Path,
         ticket: CacheTicket,
-    ) -> std::io::Result<Pin<Arc<AnalyzedFile>>> {
+    ) -> Result<Pin<Arc<AnalyzedFile>>> {
         let (cached_file, context) = {
             let workspace_cache = self.workspace_cache_for(path)?;
             (
@@ -344,7 +337,7 @@ impl Analyzer {
         path: &Path,
         workspace: &WorkspaceContext,
         ticket: CacheTicket,
-    ) -> std::io::Result<Pin<Arc<AnalyzedFile>>> {
+    ) -> Result<Pin<Arc<AnalyzedFile>>> {
         let document = self.storage.lock().unwrap().read(path)?;
         let ast_root = Box::pin(parse(&document.data));
 
@@ -396,11 +389,11 @@ impl Analyzer {
         ticket: CacheTicket,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
-    ) -> std::io::Result<AnalyzedBlock<'i, 'p>> {
+    ) -> Result<AnalyzedBlock<'i, 'p>> {
         let events: Vec<AnalyzedEvent> = block
             .statements
             .iter()
-            .map(|statement| -> std::io::Result<Vec<AnalyzedEvent>> {
+            .map(|statement| -> Result<Vec<AnalyzedEvent>> {
                 match statement {
                     Statement::Assignment(assignment) => {
                         let mut events = Vec::new();
@@ -439,7 +432,7 @@ impl Analyzer {
                                         .shallow_analyzer
                                         .analyze(&path, workspace, ticket)
                                     {
-                                        Err(err) if err.kind() == ErrorKind::NotFound => {
+                                        Err(err) if err.is_not_found() => {
                                             // Ignore missing imports as they might be imported conditionally.
                                             ShallowAnalyzedFile::empty(&path, workspace)
                                         }
@@ -596,7 +589,7 @@ impl Analyzer {
                     Statement::Error(_) => Ok(Vec::new()),
                 }
             })
-            .collect::<std::io::Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
             .collect();
@@ -614,7 +607,7 @@ impl Analyzer {
         ticket: CacheTicket,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
-    ) -> std::io::Result<Vec<AnalyzedEvent<'i, 'p>>> {
+    ) -> Result<Vec<AnalyzedEvent<'i, 'p>>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
@@ -627,7 +620,7 @@ impl Analyzer {
                         .args
                         .iter()
                         .map(|expr| self.analyze_expr(expr, workspace, ticket, document, deps))
-                        .collect::<std::io::Result<Vec<_>>>()?
+                        .collect::<Result<Vec<_>>>()?
                         .into_iter()
                         .flatten()
                         .collect();
@@ -645,7 +638,7 @@ impl Analyzer {
                     .values
                     .iter()
                     .map(|expr| self.analyze_expr(expr, workspace, ticket, document, deps))
-                    .collect::<std::io::Result<Vec<_>>>()?
+                    .collect::<Result<Vec<_>>>()?
                     .into_iter()
                     .flatten()
                     .collect()),

@@ -14,7 +14,7 @@
 
 use std::{
     collections::BTreeMap,
-    io::ErrorKind,
+    fmt::Write,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex, RwLock},
@@ -30,6 +30,7 @@ use crate::{
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
+    error::{Error, Result},
     storage::{Document, DocumentStorage},
     util::{parse_simple_literal, CacheTicket},
 };
@@ -38,30 +39,16 @@ fn is_exported(name: &str) -> bool {
     !name.starts_with("_")
 }
 
-#[derive(Debug)]
-struct LoopError {
-    cycle: Vec<PathBuf>,
-}
-
-impl std::fmt::Display for LoopError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Cycle detected: ")?;
-        for (i, path) in self.cycle.iter().enumerate() {
-            if i > 0 {
-                write!(f, " -> ")?;
-            }
-            write!(f, "{}", path.to_string_lossy())?;
+fn make_loop_error(cycle: &[PathBuf]) -> Error {
+    let mut message = String::new();
+    write!(&mut message, "Cycle detected: ").ok();
+    for (i, path) in cycle.iter().enumerate() {
+        if i > 0 {
+            write!(&mut message, " -> ").ok();
         }
-        Ok(())
+        write!(&mut message, "{}", path.to_string_lossy()).ok();
     }
-}
-
-impl std::error::Error for LoopError {}
-
-impl From<LoopError> for std::io::Error {
-    fn from(err: LoopError) -> Self {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, err)
-    }
+    Error::General(message)
 }
 
 pub struct ShallowAnalyzer {
@@ -82,7 +69,7 @@ impl ShallowAnalyzer {
         path: &Path,
         workspace: &WorkspaceContext,
         ticket: CacheTicket,
-    ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
+    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         self.analyze_cached(path, workspace, ticket, &mut Vec::new())
     }
 
@@ -92,7 +79,7 @@ impl ShallowAnalyzer {
         workspace: &WorkspaceContext,
         ticket: CacheTicket,
         visiting: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
+    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if let Some(cached_file) = self.cache.get(path) {
             if &cached_file.workspace == workspace
                 && cached_file.is_fresh(ticket, &self.storage.lock().unwrap())?
@@ -113,12 +100,9 @@ impl ShallowAnalyzer {
         workspace: &WorkspaceContext,
         ticket: CacheTicket,
         visiting: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
+    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if visiting.iter().any(|p| p == path) {
-            return Err(LoopError {
-                cycle: std::mem::take(visiting),
-            }
-            .into());
+            return Err(make_loop_error(visiting));
         }
 
         visiting.push(path.to_path_buf());
@@ -133,10 +117,10 @@ impl ShallowAnalyzer {
         workspace: &WorkspaceContext,
         ticket: CacheTicket,
         visiting: &mut Vec<PathBuf>,
-    ) -> std::io::Result<Pin<Arc<ShallowAnalyzedFile>>> {
+    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         let document = match self.storage.lock().unwrap().read(path) {
             Ok(document) => document,
-            Err(err) if err.kind() == ErrorKind::NotFound => {
+            Err(err) if err.is_not_found() => {
                 // Ignore missing imports as they might be imported conditionally.
                 return Ok(ShallowAnalyzedFile::empty(path, workspace));
             }
@@ -173,7 +157,7 @@ impl ShallowAnalyzer {
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
         visiting: &mut Vec<PathBuf>,
-    ) -> std::io::Result<ShallowAnalyzedBlock<'i, 'p>> {
+    ) -> Result<ShallowAnalyzedBlock<'i, 'p>> {
         let mut analyzed_block = ShallowAnalyzedBlock::new_top_level();
 
         for statement in &block.statements {

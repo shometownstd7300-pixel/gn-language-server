@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{borrow::Cow, process::Stdio};
+use std::process::Stdio;
 
 use pest::Span;
 use tokio::{
@@ -21,19 +21,22 @@ use tokio::{
 };
 use tower_lsp::lsp_types::{DocumentFormattingParams, TextEdit};
 
-use crate::{analyze::find_workspace_root, binary::find_gn_binary, server::RequestContext};
-
-use super::{into_rpc_error, new_rpc_error, RpcResult};
+use crate::{
+    analyze::find_workspace_root,
+    binary::find_gn_binary,
+    error::{Error, Result},
+    server::RequestContext,
+};
 
 pub async fn formatting(
     context: &RequestContext,
     params: DocumentFormattingParams,
-) -> RpcResult<Option<Vec<TextEdit>>> {
+) -> Result<Option<Vec<TextEdit>>> {
     let Ok(file_path) = params.text_document.uri.to_file_path() else {
-        return Err(new_rpc_error(Cow::from(format!(
+        return Err(Error::General(format!(
             "invalid file URI: {}",
             params.text_document.uri
-        ))));
+        )));
     };
 
     let configs = context.client.configurations().await;
@@ -41,33 +44,27 @@ pub async fn formatting(
         if gn_path.exists() {
             gn_path.to_path_buf()
         } else {
-            return Err(new_rpc_error(Cow::from(format!(
+            return Err(Error::General(format!(
                 "gn binary not found at {}; check configuration value gn.binaryPath",
                 gn_path.display()
-            ))));
+            )));
         }
     } else if let Some(gn_path) = find_gn_binary(find_workspace_root(&file_path).ok()) {
         gn_path
     } else {
-        return Err(new_rpc_error(Cow::from(
-            "gn binary not found; specify configuration value gn.binaryPath",
-        )));
+        return Err(Error::General(
+            "gn binary not found; specify configuration value gn.binaryPath".to_string(),
+        ));
     };
 
-    let document = context
-        .storage
-        .lock()
-        .unwrap()
-        .read(&file_path)
-        .map_err(into_rpc_error)?;
+    let document = context.storage.lock().unwrap().read(&file_path)?;
 
     let mut process = Command::new(gn_path)
         .args(["format", "--stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-        .map_err(into_rpc_error)?;
+        .spawn()?;
 
     let write_task = {
         let mut stdin = process.stdin.take().unwrap();
@@ -87,14 +84,14 @@ pub async fn formatting(
     // Check the status first.
     let status = process.wait().await.unwrap();
     if !status.success() {
-        return Err(new_rpc_error(Cow::from(format!(
+        return Err(Error::General(format!(
             "gn format failed with status {}",
             status.code().unwrap_or(-1)
-        ))));
+        )));
     }
 
     // Check the IO result then.
-    io_result.map_err(into_rpc_error)?;
+    io_result?;
 
     let whole_range = document
         .line_index

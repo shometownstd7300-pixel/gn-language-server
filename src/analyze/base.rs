@@ -25,6 +25,7 @@ use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
     ast::{parse, Block, Call, Comments, Statement},
+    error::{Error, Result},
     storage::{Document, DocumentStorage, DocumentVersion},
     util::CacheTicket,
 };
@@ -39,16 +40,16 @@ pub fn compute_next_check(t: Instant, version: DocumentVersion) -> Instant {
     }
 }
 
-pub fn find_workspace_root(path: &Path) -> std::io::Result<&Path> {
+pub fn find_workspace_root(path: &Path) -> Result<&Path> {
     for dir in path.ancestors().skip(1) {
         if dir.join(".gn").try_exists()? {
             return Ok(dir);
         }
     }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        format!("Workspace not found for {}", path.to_string_lossy()),
-    ))
+    Err(Error::General(format!(
+        "Workspace not found for {}",
+        path.to_string_lossy()
+    )))
 }
 
 pub fn resolve_path(name: &str, root_dir: &Path, current_dir: &Path) -> PathBuf {
@@ -111,11 +112,7 @@ impl ShallowAnalyzedFile {
         })
     }
 
-    pub fn is_fresh(
-        &self,
-        ticket: CacheTicket,
-        storage: &DocumentStorage,
-    ) -> std::io::Result<bool> {
+    pub fn is_fresh(&self, ticket: CacheTicket, storage: &DocumentStorage) -> Result<bool> {
         if ticket.time() <= *self.next_check.read().unwrap() {
             return Ok(true);
         }
@@ -175,11 +172,7 @@ pub struct AnalyzedFile {
 }
 
 impl AnalyzedFile {
-    pub fn is_fresh(
-        &self,
-        ticket: CacheTicket,
-        storage: &DocumentStorage,
-    ) -> std::io::Result<bool> {
+    pub fn is_fresh(&self, ticket: CacheTicket, storage: &DocumentStorage) -> Result<bool> {
         if ticket.time() <= *self.next_check.read().unwrap() {
             return Ok(true);
         }

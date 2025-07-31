@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-
 use itertools::Itertools;
 use tower_lsp::lsp_types::Position;
 
@@ -33,20 +31,6 @@ pub mod goto_definition;
 pub mod hover;
 pub mod indexing;
 pub mod references;
-
-pub type RpcResult<T> = tower_lsp::jsonrpc::Result<T>;
-
-pub fn new_rpc_error(message: Cow<'static, str>) -> tower_lsp::jsonrpc::Error {
-    tower_lsp::jsonrpc::Error {
-        code: tower_lsp::jsonrpc::ErrorCode::ServerError(1),
-        message,
-        data: None,
-    }
-}
-
-pub fn into_rpc_error(err: std::io::Error) -> tower_lsp::jsonrpc::Error {
-    new_rpc_error(Cow::from(err.to_string()))
-}
 
 pub fn lookup_identifier_at(file: &AnalyzedFile, position: Position) -> Option<&Identifier> {
     let offset = file.document.line_index.offset(position)?;

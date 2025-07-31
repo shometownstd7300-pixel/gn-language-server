@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{borrow::Cow, path::Path};
+use std::path::Path;
 
 use itertools::Itertools;
 use tower_lsp::lsp_types::{
@@ -23,10 +23,9 @@ use tower_lsp::lsp_types::{
 use crate::{
     ast::{Block, Node, Statement},
     builtins::BUILTINS,
+    error::{Error, Result},
     server::RequestContext,
 };
-
-use super::{into_rpc_error, new_rpc_error, RpcResult};
 
 fn is_after_dot(data: &str, offset: usize) -> bool {
     for ch in data[..offset].chars().rev() {
@@ -89,25 +88,24 @@ fn build_filename_completions(path: &Path, prefix: &str) -> Option<Vec<Completio
 pub async fn completion(
     context: &RequestContext,
     params: CompletionParams,
-) -> RpcResult<Option<CompletionResponse>> {
+) -> Result<Option<CompletionResponse>> {
     let Ok(path) = params
         .text_document_position
         .text_document
         .uri
         .to_file_path()
     else {
-        return Err(new_rpc_error(Cow::from(format!(
+        return Err(Error::General(format!(
             "invalid file URI: {}",
             params.text_document_position.text_document.uri
-        ))));
+        )));
     };
 
     let current_file = context
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)
-        .map_err(into_rpc_error)?;
+        .analyze(&path, context.ticket)?;
 
     let offset = current_file
         .document
