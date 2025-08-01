@@ -103,6 +103,10 @@ That is:
 - Pre-release versions are `1.<odd>.x`
 - Release versions are `1.<even>.x`
 
+## Architecture
+
+For an overview of the project's architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ## Disclaimer
 
 This is not an officially supported Google product. This project is not
