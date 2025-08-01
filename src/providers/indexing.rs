@@ -25,7 +25,7 @@ fn contains_args_gn(entry: &DirEntry) -> bool {
 
 async fn index_file(path: &Path, context: &RequestContext) {
     let mut analyzer = context.analyzer.lock().unwrap();
-    analyzer.analyze(path, context.ticket).ok();
+    analyzer.analyze(path, context.cache_config).ok();
 }
 
 pub async fn index(context: &RequestContext, initiator_path: &Path) {

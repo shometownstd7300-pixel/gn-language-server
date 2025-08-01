@@ -33,7 +33,7 @@ use crate::{
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     error::{Error, Result},
     storage::{Document, DocumentStorage, DocumentVersion},
-    util::{parse_simple_literal, CacheTicket, LineIndex},
+    util::{parse_simple_literal, CacheConfig, LineIndex},
 };
 
 pub use base::{
@@ -260,11 +260,15 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(&mut self, path: &Path, ticket: CacheTicket) -> Result<Pin<Arc<AnalyzedFile>>> {
+    pub fn analyze(
+        &mut self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Pin<Arc<AnalyzedFile>>> {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
-        self.analyze_cached(path, ticket)
+        self.analyze_cached(path, cache_config)
     }
 
     pub fn workspace_cache_for(&mut self, path: &Path) -> Result<&mut WorkspaceCache> {
@@ -309,7 +313,7 @@ impl Analyzer {
     fn analyze_cached(
         &mut self,
         path: &Path,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
         let (cached_file, context) = {
             let workspace_cache = self.workspace_cache_for(path)?;
@@ -320,12 +324,12 @@ impl Analyzer {
         };
         if let Some(cached_file) = cached_file {
             let storage = self.storage.lock().unwrap();
-            if cached_file.is_fresh(ticket, &storage)? {
+            if cached_file.is_fresh(cache_config, &storage)? {
                 return Ok(cached_file);
             }
         }
 
-        let new_file = self.analyze_uncached(path, &context, ticket)?;
+        let new_file = self.analyze_uncached(path, &context, cache_config)?;
         self.workspace_cache_for(path)?
             .files
             .insert(path.to_path_buf(), new_file.clone());
@@ -336,19 +340,19 @@ impl Analyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
         let document = self.storage.lock().unwrap().read(path)?;
         let ast_root = Box::pin(parse(&document.data));
 
         let mut deps = Vec::new();
         let mut analyzed_root =
-            self.analyze_block(&ast_root, workspace, ticket, &document, &mut deps)?;
+            self.analyze_block(&ast_root, workspace, cache_config, &document, &mut deps)?;
 
         // Insert a synthetic import of BUILDCONFIG.gn.
         let dot_gn_file =
             self.shallow_analyzer
-                .analyze(&workspace.build_config, workspace, ticket)?;
+                .analyze(&workspace.build_config, workspace, cache_config)?;
         analyzed_root.events.insert(
             0,
             AnalyzedEvent::Import(AnalyzedImport {
@@ -386,7 +390,7 @@ impl Analyzer {
         &mut self,
         block: &'p Block<'i>,
         workspace: &WorkspaceContext,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     ) -> Result<AnalyzedBlock<'i, 'p>> {
@@ -412,7 +416,7 @@ impl Analyzer {
                         events.extend(self.analyze_expr(
                             &assignment.rvalue,
                             workspace,
-                            ticket,
+                            cache_config,
                             document,
                             deps,
                         )?);
@@ -428,10 +432,11 @@ impl Analyzer {
                                 {
                                     let path = workspace
                                         .resolve_path(name, document.path.parent().unwrap());
-                                    let file = match self
-                                        .shallow_analyzer
-                                        .analyze(&path, workspace, ticket)
-                                    {
+                                    let file = match self.shallow_analyzer.analyze(
+                                        &path,
+                                        workspace,
+                                        cache_config,
+                                    ) {
                                         Err(err) if err.is_not_found() => {
                                             // Ignore missing imports as they might be imported conditionally.
                                             ShallowAnalyzedFile::empty(&path, workspace)
@@ -464,15 +469,24 @@ impl Analyzer {
                                 }
                                 if let Some(block) = &call.block {
                                     events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                        block, workspace, ticket, document, deps,
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
                                     )?));
                                 }
                                 Ok(events)
                             }
                             DECLARE_ARGS => {
                                 if let Some(block) = &call.block {
-                                    let analyzed_root = self
-                                        .analyze_block(block, workspace, ticket, document, deps)?;
+                                    let analyzed_root = self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                    )?;
                                     Ok(vec![AnalyzedEvent::DeclareArgs(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -481,7 +495,13 @@ impl Analyzer {
                             FOREACH => {
                                 if let Some(block) = &call.block {
                                     Ok(self
-                                        .analyze_block(block, workspace, ticket, document, deps)?
+                                        .analyze_block(
+                                            block,
+                                            workspace,
+                                            cache_config,
+                                            document,
+                                            deps,
+                                        )?
                                         .events)
                                 } else {
                                     Ok(Vec::new())
@@ -489,8 +509,13 @@ impl Analyzer {
                             }
                             SET_DEFAULTS => {
                                 if let Some(block) = &call.block {
-                                    let analyzed_root = self
-                                        .analyze_block(block, workspace, ticket, document, deps)?;
+                                    let analyzed_root = self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                    )?;
                                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -542,7 +567,11 @@ impl Analyzer {
                                 }
                                 if let Some(block) = &call.block {
                                     events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                        block, workspace, ticket, document, deps,
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
                                     )?));
                                 }
                                 Ok(events)
@@ -557,14 +586,14 @@ impl Analyzer {
                             events.extend(self.analyze_expr(
                                 &current_condition.condition,
                                 workspace,
-                                ticket,
+                                cache_config,
                                 document,
                                 deps,
                             )?);
                             condition_blocks.push(self.analyze_block(
                                 &current_condition.then_block,
                                 workspace,
-                                ticket,
+                                cache_config,
                                 document,
                                 deps,
                             )?);
@@ -574,11 +603,13 @@ impl Analyzer {
                                     current_condition = next_condition;
                                 }
                                 Some(Either::Right(block)) => {
-                                    condition_blocks.push(
-                                        self.analyze_block(
-                                            block, workspace, ticket, document, deps,
-                                        )?,
-                                    );
+                                    condition_blocks.push(self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                    )?);
                                     break;
                                 }
                             }
@@ -604,7 +635,7 @@ impl Analyzer {
         &mut self,
         expr: &'p Expr<'i>,
         workspace: &WorkspaceContext,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     ) -> Result<Vec<AnalyzedEvent<'i, 'p>>> {
@@ -612,32 +643,34 @@ impl Analyzer {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
                     let analyzed_root =
-                        self.analyze_block(block, workspace, ticket, document, deps)?;
+                        self.analyze_block(block, workspace, cache_config, document, deps)?;
                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                 }
                 PrimaryExpr::Call(call) => {
                     let mut events: Vec<AnalyzedEvent> = call
                         .args
                         .iter()
-                        .map(|expr| self.analyze_expr(expr, workspace, ticket, document, deps))
+                        .map(|expr| {
+                            self.analyze_expr(expr, workspace, cache_config, document, deps)
+                        })
                         .collect::<Result<Vec<_>>>()?
                         .into_iter()
                         .flatten()
                         .collect();
                     if let Some(block) = &call.block {
                         let analyzed_root =
-                            self.analyze_block(block, workspace, ticket, document, deps)?;
+                            self.analyze_block(block, workspace, cache_config, document, deps)?;
                         events.push(AnalyzedEvent::NewScope(analyzed_root));
                     }
                     Ok(events)
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
-                    self.analyze_expr(&paren_expr.expr, workspace, ticket, document, deps)
+                    self.analyze_expr(&paren_expr.expr, workspace, cache_config, document, deps)
                 }
                 PrimaryExpr::List(list_literal) => Ok(list_literal
                     .values
                     .iter()
-                    .map(|expr| self.analyze_expr(expr, workspace, ticket, document, deps))
+                    .map(|expr| self.analyze_expr(expr, workspace, cache_config, document, deps))
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
                     .flatten()
@@ -650,15 +683,15 @@ impl Analyzer {
                 | PrimaryExpr::Error(_) => Ok(Vec::new()),
             },
             Expr::Unary(unary_expr) => {
-                self.analyze_expr(&unary_expr.expr, workspace, ticket, document, deps)
+                self.analyze_expr(&unary_expr.expr, workspace, cache_config, document, deps)
             }
             Expr::Binary(binary_expr) => {
                 let mut events =
-                    self.analyze_expr(&binary_expr.lhs, workspace, ticket, document, deps)?;
+                    self.analyze_expr(&binary_expr.lhs, workspace, cache_config, document, deps)?;
                 events.extend(self.analyze_expr(
                     &binary_expr.rhs,
                     workspace,
-                    ticket,
+                    cache_config,
                     document,
                     deps,
                 )?);

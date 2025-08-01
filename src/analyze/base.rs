@@ -27,7 +27,7 @@ use crate::{
     ast::{parse, Block, Call, Comments, Statement},
     error::{Error, Result},
     storage::{Document, DocumentStorage, DocumentVersion},
-    util::CacheTicket,
+    util::CacheConfig,
 };
 
 const CHECK_INTERVAL: Duration = Duration::from_secs(5);
@@ -112,13 +112,17 @@ impl ShallowAnalyzedFile {
         })
     }
 
-    pub fn is_fresh(&self, ticket: CacheTicket, storage: &DocumentStorage) -> Result<bool> {
-        if ticket.time() <= *self.next_check.read().unwrap() {
+    pub fn is_fresh(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> Result<bool> {
+        if !cache_config.should_update_shallow() {
+            return Ok(true);
+        }
+
+        if cache_config.time() <= *self.next_check.read().unwrap() {
             return Ok(true);
         }
 
         let mut next_check = self.next_check.write().unwrap();
-        if ticket.time() <= *next_check {
+        if cache_config.time() <= *next_check {
             return Ok(true);
         }
 
@@ -128,12 +132,12 @@ impl ShallowAnalyzedFile {
         }
 
         for dep in &self.deps {
-            if !dep.is_fresh(ticket, storage)? {
+            if !dep.is_fresh(cache_config, storage)? {
                 return Ok(false);
             }
         }
 
-        *next_check = compute_next_check(ticket.time(), version);
+        *next_check = compute_next_check(cache_config.time(), version);
         Ok(true)
     }
 }
@@ -172,13 +176,13 @@ pub struct AnalyzedFile {
 }
 
 impl AnalyzedFile {
-    pub fn is_fresh(&self, ticket: CacheTicket, storage: &DocumentStorage) -> Result<bool> {
-        if ticket.time() <= *self.next_check.read().unwrap() {
+    pub fn is_fresh(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> Result<bool> {
+        if cache_config.time() <= *self.next_check.read().unwrap() {
             return Ok(true);
         }
 
         let mut next_check = self.next_check.write().unwrap();
-        if ticket.time() <= *next_check {
+        if cache_config.time() <= *next_check {
             return Ok(true);
         }
 
@@ -188,12 +192,12 @@ impl AnalyzedFile {
         }
 
         for dep in &self.deps {
-            if !dep.is_fresh(ticket, storage)? {
+            if !dep.is_fresh(cache_config, storage)? {
                 return Ok(false);
             }
         }
 
-        *next_check = compute_next_check(ticket.time(), version);
+        *next_check = compute_next_check(cache_config.time(), version);
         Ok(true)
     }
 

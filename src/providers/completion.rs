@@ -105,7 +105,7 @@ pub async fn completion(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)?;
+        .analyze(&path, context.cache_config)?;
 
     let offset = current_file
         .document

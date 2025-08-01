@@ -45,7 +45,7 @@ pub async fn goto_definition(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)?;
+        .analyze(&path, context.cache_config)?;
 
     // Check links first.
     if let Some(offset) = current_file
@@ -65,7 +65,7 @@ pub async fn goto_definition(
                         .analyzer
                         .lock()
                         .unwrap()
-                        .analyze(path, context.ticket)?;
+                        .analyze(path, context.cache_config)?;
                     (
                         path,
                         find_target_position(&target_file, name).unwrap_or_default(),

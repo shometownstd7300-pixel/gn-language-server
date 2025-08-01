@@ -32,7 +32,7 @@ use crate::{
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     error::{Error, Result},
     storage::{Document, DocumentStorage},
-    util::{parse_simple_literal, CacheTicket},
+    util::{parse_simple_literal, CacheConfig},
 };
 
 fn is_exported(name: &str) -> bool {
@@ -68,27 +68,27 @@ impl ShallowAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
-        self.analyze_cached(path, workspace, ticket, &mut Vec::new())
+        self.analyze_cached(path, workspace, cache_config, &mut Vec::new())
     }
 
     fn analyze_cached(
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if let Some(cached_file) = self.cache.get(path) {
             if &cached_file.workspace == workspace
-                && cached_file.is_fresh(ticket, &self.storage.lock().unwrap())?
+                && cached_file.is_fresh(cache_config, &self.storage.lock().unwrap())?
             {
                 return Ok(cached_file.clone());
             }
         }
 
-        let new_file = self.analyze_uncached(path, workspace, ticket, visiting)?;
+        let new_file = self.analyze_uncached(path, workspace, cache_config, visiting)?;
         self.cache.insert(path.to_path_buf(), new_file.clone());
 
         Ok(new_file)
@@ -98,7 +98,7 @@ impl ShallowAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if visiting.iter().any(|p| p == path) {
@@ -106,7 +106,7 @@ impl ShallowAnalyzer {
         }
 
         visiting.push(path.to_path_buf());
-        let result = self.analyze_uncached_inner(path, workspace, ticket, visiting);
+        let result = self.analyze_uncached_inner(path, workspace, cache_config, visiting);
         visiting.pop();
         result
     }
@@ -115,7 +115,7 @@ impl ShallowAnalyzer {
         &mut self,
         path: &Path,
         workspace: &WorkspaceContext,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         let document = match self.storage.lock().unwrap().read(path) {
@@ -128,8 +128,14 @@ impl ShallowAnalyzer {
         };
         let ast_root = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
-        let analyzed_root =
-            self.analyze_block(&ast_root, workspace, ticket, &document, &mut deps, visiting)?;
+        let analyzed_root = self.analyze_block(
+            &ast_root,
+            workspace,
+            cache_config,
+            &document,
+            &mut deps,
+            visiting,
+        )?;
 
         // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
         let analyzed_root = unsafe {
@@ -153,7 +159,7 @@ impl ShallowAnalyzer {
         &mut self,
         block: &'p Block<'i>,
         workspace: &WorkspaceContext,
-        ticket: CacheTicket,
+        cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
         visiting: &mut Vec<PathBuf>,
@@ -187,7 +193,8 @@ impl ShallowAnalyzer {
                         {
                             let path =
                                 workspace.resolve_path(name, document.path.parent().unwrap());
-                            let file = self.analyze_cached(&path, workspace, ticket, visiting)?;
+                            let file =
+                                self.analyze_cached(&path, workspace, cache_config, visiting)?;
                             analyzed_block.merge(&file.analyzed_root);
                             deps.push(file);
                         }
@@ -212,7 +219,12 @@ impl ShallowAnalyzer {
                     DECLARE_ARGS | FOREACH => {
                         if let Some(block) = &call.block {
                             analyzed_block.merge(&self.analyze_block(
-                                block, workspace, ticket, document, deps, visiting,
+                                block,
+                                workspace,
+                                cache_config,
+                                document,
+                                deps,
+                                visiting,
                             )?);
                         }
                     }
@@ -266,7 +278,7 @@ impl ShallowAnalyzer {
                         analyzed_block.merge(&self.analyze_block(
                             &current_condition.then_block,
                             workspace,
-                            ticket,
+                            cache_config,
                             document,
                             deps,
                             visiting,
@@ -278,7 +290,12 @@ impl ShallowAnalyzer {
                             }
                             Some(Either::Right(block)) => {
                                 analyzed_block.merge(&self.analyze_block(
-                                    block, workspace, ticket, document, deps, visiting,
+                                    block,
+                                    workspace,
+                                    cache_config,
+                                    document,
+                                    deps,
+                                    visiting,
                                 )?);
                                 break;
                             }

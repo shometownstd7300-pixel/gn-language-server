@@ -45,7 +45,7 @@ pub async fn document_link(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)?;
+        .analyze(&path, context.cache_config)?;
 
     let links = current_file
         .links
@@ -91,7 +91,7 @@ pub async fn document_link_resolve(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&data.path, context.ticket)?;
+        .analyze(&data.path, context.cache_config)?;
 
     let position = find_target_position(&target_file, &data.name).unwrap_or_default();
     let mut uri = Url::from_file_path(&data.path).unwrap();

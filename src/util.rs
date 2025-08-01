@@ -83,17 +83,25 @@ impl<'i> LineIndex<'i> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct CacheTicket {
-    t: Instant,
+pub struct CacheConfig {
+    time: Instant,
+    update_shallow: bool,
 }
 
-impl CacheTicket {
-    pub fn new() -> Self {
-        Self { t: Instant::now() }
+impl CacheConfig {
+    pub fn new(update_shallow: bool) -> Self {
+        Self {
+            time: Instant::now(),
+            update_shallow,
+        }
     }
 
     pub fn time(self) -> Instant {
-        self.t
+        self.time
+    }
+
+    pub fn should_update_shallow(self) -> bool {
+        self.update_shallow
     }
 }
 

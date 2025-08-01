@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     analyze::Analyzer, ast::Statement, storage::DocumentStorage, testutil::testdata,
-    util::CacheTicket,
+    util::CacheConfig,
 };
 
 #[test]
@@ -27,7 +27,10 @@ fn test_analyze_smoke() {
     let mut analyzer = Analyzer::new(&storage);
 
     let file = analyzer
-        .analyze(&testdata("workspaces/smoke/BUILD.gn"), CacheTicket::new())
+        .analyze(
+            &testdata("workspaces/smoke/BUILD.gn"),
+            CacheConfig::new(true),
+        )
         .unwrap();
 
     // No parse error.
@@ -46,14 +49,14 @@ fn test_analyze_smoke() {
 
 #[test]
 fn test_analyze_cycles() {
-    let ticket = CacheTicket::new();
+    let cache_config = CacheConfig::new(true);
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
     let mut analyzer = Analyzer::new(&storage);
 
     assert!(analyzer
-        .analyze(&testdata("workspaces/cycles/ok1.gni"), ticket)
+        .analyze(&testdata("workspaces/cycles/ok1.gni"), cache_config)
         .is_ok());
     assert!(analyzer
-        .analyze(&testdata("workspaces/cycles/bad1.gni"), ticket)
+        .analyze(&testdata("workspaces/cycles/bad1.gni"), cache_config)
         .is_err());
 }

@@ -111,7 +111,7 @@ pub async fn references(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)?;
+        .analyze(&path, context.cache_config)?;
 
     // Wait for the background indexing to finish.
     let indexing = context

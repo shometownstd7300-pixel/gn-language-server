@@ -30,7 +30,7 @@ pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.ticket)
+        .analyze(&path, context.cache_config)
     else {
         return;
     };
