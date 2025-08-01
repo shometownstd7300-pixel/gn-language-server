@@ -64,7 +64,7 @@ fn resolve_target<'s>(
         if !rel_dir.is_empty() {
             Some((
                 workspace.root.join(rel_dir).join("BUILD.gn"),
-                rel_dir.split('/').last().unwrap(),
+                rel_dir.split('/').next_back().unwrap(),
             ))
         } else {
             None
