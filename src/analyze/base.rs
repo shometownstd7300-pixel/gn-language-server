@@ -157,8 +157,8 @@ impl ShallowAnalyzedBlock<'_, '_> {
         }
     }
 
-    pub fn merge(&mut self, other: &Self) {
-        self.scope.merge(&other.scope);
+    pub fn merge(&mut self, other: &Self, imported: bool) {
+        self.scope.merge(&other.scope, imported);
         self.templates.extend(other.templates.clone());
         self.targets.extend(other.targets.clone());
     }
@@ -238,7 +238,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                     scope.insert(assignment.clone());
                 }
                 AnalyzedEvent::Import(import) => {
-                    scope.merge(&import.file.analyzed_root.scope);
+                    scope.merge(&import.file.analyzed_root.scope, true);
                 }
                 _ => {}
             }
@@ -417,20 +417,25 @@ impl<'i, 'p> AnalyzedScope<'i, 'p> {
             .entry(assignment.name)
             .or_insert_with(|| AnalyzedVariable {
                 assignments: HashSet::new(),
+                imported: false,
             })
             .assignments
             .insert(assignment);
     }
 
-    pub fn merge(&mut self, other: &Self) {
+    pub fn merge(&mut self, other: &Self, imported: bool) {
         for (name, other_variable) in &other.variables {
-            self.variables
+            let variable = self
+                .variables
                 .entry(name)
                 .or_insert_with(|| AnalyzedVariable {
                     assignments: HashSet::new(),
-                })
+                    imported,
+                });
+            variable
                 .assignments
                 .extend(other_variable.assignments.clone());
+            variable.imported |= imported;
         }
     }
 
@@ -450,6 +455,7 @@ impl<'i, 'p> AnalyzedScope<'i, 'p> {
 #[derive(Clone)]
 pub struct AnalyzedVariable<'i, 'p> {
     pub assignments: HashSet<AnalyzedAssignment<'i, 'p>>,
+    pub imported: bool,
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]

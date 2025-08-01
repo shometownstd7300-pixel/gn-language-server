@@ -195,7 +195,7 @@ impl ShallowAnalyzer {
                                 workspace.resolve_path(name, document.path.parent().unwrap());
                             let file =
                                 self.analyze_cached(&path, workspace, cache_config, visiting)?;
-                            analyzed_block.merge(&file.analyzed_root);
+                            analyzed_block.merge(&file.analyzed_root, true);
                             deps.push(file);
                         }
                     }
@@ -218,14 +218,17 @@ impl ShallowAnalyzer {
                     }
                     DECLARE_ARGS | FOREACH => {
                         if let Some(block) = &call.block {
-                            analyzed_block.merge(&self.analyze_block(
-                                block,
-                                workspace,
-                                cache_config,
-                                document,
-                                deps,
-                                visiting,
-                            )?);
+                            analyzed_block.merge(
+                                &self.analyze_block(
+                                    block,
+                                    workspace,
+                                    cache_config,
+                                    document,
+                                    deps,
+                                    visiting,
+                                )?,
+                                false,
+                            );
                         }
                     }
                     SET_DEFAULTS => {}
@@ -275,28 +278,34 @@ impl ShallowAnalyzer {
                 Statement::Condition(condition) => {
                     let mut current_condition = condition;
                     loop {
-                        analyzed_block.merge(&self.analyze_block(
-                            &current_condition.then_block,
-                            workspace,
-                            cache_config,
-                            document,
-                            deps,
-                            visiting,
-                        )?);
+                        analyzed_block.merge(
+                            &self.analyze_block(
+                                &current_condition.then_block,
+                                workspace,
+                                cache_config,
+                                document,
+                                deps,
+                                visiting,
+                            )?,
+                            false,
+                        );
                         match &current_condition.else_block {
                             None => break,
                             Some(Either::Left(next_condition)) => {
                                 current_condition = next_condition;
                             }
                             Some(Either::Right(block)) => {
-                                analyzed_block.merge(&self.analyze_block(
-                                    block,
-                                    workspace,
-                                    cache_config,
-                                    document,
-                                    deps,
-                                    visiting,
-                                )?);
+                                analyzed_block.merge(
+                                    &self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                        visiting,
+                                    )?,
+                                    false,
+                                );
                                 break;
                             }
                         }
