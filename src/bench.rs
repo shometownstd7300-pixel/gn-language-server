@@ -18,13 +18,11 @@ use std::{
     time::Instant,
 };
 
-use walkdir::DirEntry;
-
-use crate::{analyze::Analyzer, storage::DocumentStorage, utils::CacheConfig};
-
-fn contains_args_gn(entry: &DirEntry) -> bool {
-    entry.file_type().is_dir() && entry.path().join("args.gn").exists()
-}
+use crate::{
+    analyze::Analyzer,
+    storage::DocumentStorage,
+    utils::{find_gn_files, CacheConfig},
+};
 
 pub fn run_bench(workspace_root: &Path) {
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
@@ -34,20 +32,10 @@ pub fn run_bench(workspace_root: &Path) {
     let start_time = Instant::now();
     let mut count = 0;
 
-    let walk = walkdir::WalkDir::new(workspace_root)
-        .into_iter()
-        .filter_entry(|entry| !contains_args_gn(entry));
-    for entry in walk {
-        let Ok(entry) = entry else { continue };
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.ends_with(".gn") || name.ends_with(".gni"))
-        {
-            analyzer.analyze_shallow(entry.path(), cache_config).ok();
-            count += 1;
-            eprint!(".");
-        }
+    for path in find_gn_files(workspace_root) {
+        analyzer.analyze_shallow(&path, cache_config).ok();
+        count += 1;
+        eprint!(".");
     }
     let elapsed = start_time.elapsed();
 

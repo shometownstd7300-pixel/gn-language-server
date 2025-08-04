@@ -12,11 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{path::Path, sync::Arc, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
 use pest::Span;
 use tokio::sync::SetOnce;
 use tower_lsp::lsp_types::{Position, Range};
+use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
 
@@ -30,6 +35,22 @@ pub fn find_workspace_root(path: &Path) -> Result<&Path> {
         "Workspace not found for {}",
         path.to_string_lossy()
     )))
+}
+
+pub fn find_gn_files(root: &Path) -> impl Iterator<Item = PathBuf> {
+    WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| {
+            !(entry.file_type().is_dir() && entry.path().join("args.gn").exists())
+        })
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.ends_with(".gn") || name.ends_with(".gni"))
+        })
+        .map(|entry| entry.into_path())
 }
 
 #[derive(Clone)]

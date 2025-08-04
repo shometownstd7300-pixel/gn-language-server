@@ -15,13 +15,8 @@
 use std::{path::Path, time::Instant};
 
 use tower_lsp::lsp_types::MessageType;
-use walkdir::{DirEntry, WalkDir};
 
-use crate::server::RequestContext;
-
-fn contains_args_gn(entry: &DirEntry) -> bool {
-    entry.file_type().is_dir() && entry.path().join("args.gn").exists()
-}
+use crate::{server::RequestContext, utils::find_gn_files};
 
 pub async fn index(context: &RequestContext, workspace_root: &Path) {
     context
@@ -35,22 +30,10 @@ pub async fn index(context: &RequestContext, workspace_root: &Path) {
     let start_time = Instant::now();
     let mut count = 0;
 
-    let walk = WalkDir::new(workspace_root)
-        .into_iter()
-        .filter_entry(|entry| !contains_args_gn(entry));
-    for entry in walk {
-        let Ok(entry) = entry else { continue };
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.ends_with(".gn") || name.ends_with(".gni"))
-        {
-            let mut analyzer = context.analyzer.lock().unwrap();
-            analyzer
-                .analyze_shallow(entry.path(), context.cache_config)
-                .ok();
-            count += 1;
-        }
+    for path in find_gn_files(workspace_root) {
+        let mut analyzer = context.analyzer.lock().unwrap();
+        analyzer.analyze_shallow(&path, context.cache_config).ok();
+        count += 1;
     }
 
     let elapsed = start_time.elapsed();
