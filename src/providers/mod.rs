@@ -16,7 +16,7 @@ use itertools::Itertools;
 use tower_lsp::lsp_types::Position;
 
 use crate::{
-    analyze::AnalyzedFile,
+    analyze::{AnalyzedEvent, AnalyzedFile, AnalyzedTarget},
     ast::{Identifier, Node},
 };
 
@@ -37,6 +37,21 @@ pub fn lookup_identifier_at(file: &AnalyzedFile, position: Position) -> Option<&
     file.ast_root
         .identifiers()
         .find(|ident| ident.span.start() <= offset && offset <= ident.span.end())
+}
+
+pub fn lookup_target_name_string_at(
+    file: &AnalyzedFile,
+    position: Position,
+) -> Option<&AnalyzedTarget> {
+    let offset = file.document.line_index.offset(position)?;
+    file.analyzed_root
+        .top_level_events()
+        .filter_map(|event| match event {
+            AnalyzedEvent::Target(target) => Some(target),
+            _ => None,
+        })
+        .filter(|target| target.header.start() < offset && offset < target.header.end())
+        .next()
 }
 
 /// Finds the position of a target.

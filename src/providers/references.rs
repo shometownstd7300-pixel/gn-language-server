@@ -12,27 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tower_lsp::lsp_types::{Location, Position, ReferenceParams, Url};
+use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
 
 use crate::{
     analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, Link},
     error::{Error, Result},
+    providers::lookup_target_name_string_at,
     server::RequestContext,
 };
-
-fn lookup_target_name_string_at<'i>(file: &AnalyzedFile, position: Position) -> Option<&'i str> {
-    let offset = file.document.line_index.offset(position)?;
-    file.analyzed_root
-        .top_level_events()
-        .filter_map(|event| match event {
-            AnalyzedEvent::Target(target) => Some(target),
-            _ => None,
-        })
-        .filter_map(|target| {
-            (target.header.start() < offset && offset < target.header.end()).then_some(target.name)
-        })
-        .next()
-}
 
 fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Vec<&'i str> {
     root.top_level_events()
@@ -124,8 +111,8 @@ pub async fn references(
 
     let position = params.text_document_position.position;
 
-    if let Some(target_name) = lookup_target_name_string_at(&current_file, position) {
-        return target_references(context, &current_file, target_name);
+    if let Some(target) = lookup_target_name_string_at(&current_file, position) {
+        return target_references(context, &current_file, target.name);
     };
 
     Ok(None)

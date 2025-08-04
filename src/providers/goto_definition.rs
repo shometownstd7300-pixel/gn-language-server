@@ -20,6 +20,7 @@ use crate::{
     analyze::Link,
     ast::Node,
     error::{Error, Result},
+    providers::lookup_target_name_string_at,
     server::RequestContext,
 };
 
@@ -80,6 +81,17 @@ pub async fn goto_definition(
                 },
             })));
         }
+    }
+
+    // Check template target names.
+    if let Some(target) =
+        lookup_target_name_string_at(&current_file, params.text_document_position_params.position)
+    {
+        // Return the self link to fall back to finding references.
+        return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+            uri: params.text_document_position_params.text_document.uri,
+            range: current_file.document.line_index.range(target.header),
+        })));
     }
 
     let Some(ident) =
