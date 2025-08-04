@@ -55,9 +55,10 @@ pub fn lookup_target_name_string_at(
 
 /// Finds the position of a target.
 pub fn find_target_position(file: &AnalyzedFile, name: &str) -> Option<Position> {
-    let targets: Vec<_> = file
-        .targets_at(usize::MAX)
-        .into_iter()
+    let targets = file.targets_at(usize::MAX);
+    let targets: Vec<_> = targets
+        .items()
+        .values()
         .sorted_by_key(|target| (&target.document.path, target.span.start()))
         .collect();
 

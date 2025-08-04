@@ -62,13 +62,8 @@ pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Opti
     let mut docs: Vec<Vec<MarkedString>> = Vec::new();
 
     // Check templates.
-    let templates: Vec<_> = current_file
-        .templates_at(ident.span.start())
-        .into_iter()
-        .filter(|template| template.name == ident.name)
-        .sorted_by_key(|template| (&template.document.path, template.span.start()))
-        .collect();
-    for template in templates {
+    let templates = current_file.templates_at(ident.span.start());
+    if let Some(template) = templates.get(ident.name) {
         let mut contents = vec![MarkedString::from_language_code(
             "gn".to_string(),
             format!("template(\"{}\") {{ ... }}", template.name),
@@ -96,12 +91,12 @@ pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Opti
     }
 
     // Check variables.
-    let scope = current_file.scope_at(ident.span.start());
-    if let Some(variable) = scope.get(ident.name) {
-        if let Some(first_assignment) = variable
+    let variables = current_file.variables_at(ident.span.start());
+    if let Some(variable) = variables.get(ident.name) {
+        if let Some((_, first_assignment)) = variable
             .assignments
             .iter()
-            .sorted_by_key(|a| (&a.document.path, a.statement.span().start()))
+            .sorted_by_key(|(_, a)| (&a.document.path, a.statement.span().start()))
             .next()
         {
             let single_assignment = variable.assignments.len() == 1;

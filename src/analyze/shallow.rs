@@ -26,10 +26,13 @@ use either::Either;
 use crate::{
     analyze::{
         data::{
-            AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, MutableShallowAnalyzedBlock,
-            ShallowAnalyzedBlock, ShallowAnalyzedFile, WorkspaceContext,
+            AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable,
+            MutableShallowAnalyzedBlock, ShallowAnalyzedBlock, ShallowAnalyzedFile,
+            WorkspaceContext,
         },
+        links::collect_links,
         utils::compute_next_check,
+        AnalyzedLink,
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
@@ -67,6 +70,10 @@ impl ShallowAnalyzer {
             storage: storage.clone(),
             cache: BTreeMap::new(),
         }
+    }
+
+    pub fn cached_files(&self) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
+        self.cache.values().cloned().collect()
     }
 
     pub fn analyze(
@@ -130,6 +137,10 @@ impl ShallowAnalyzer {
         let analyzed_root =
             self.analyze_block(&ast_root, cache_config, &document, &mut deps, visiting)?;
 
+        let links = collect_links(&ast_root, path, &self.context);
+
+        // SAFETY: links' contents are backed by pinned document.
+        let links = unsafe { std::mem::transmute::<Vec<AnalyzedLink>, Vec<AnalyzedLink>>(links) };
         // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
         let analyzed_root = unsafe {
             std::mem::transmute::<ShallowAnalyzedBlock, ShallowAnalyzedBlock>(analyzed_root)
@@ -143,6 +154,7 @@ impl ShallowAnalyzer {
             ast_root,
             analyzed_root,
             deps,
+            links,
             next_check,
         }))
     }
@@ -166,13 +178,22 @@ impl ShallowAnalyzer {
                         LValue::ScopeAccess(scope_access) => &scope_access.scope,
                     };
                     if is_exported(identifier.name) {
-                        analyzed_block.scope.insert(AnalyzedAssignment {
-                            name: identifier.name,
-                            comments: assignment.comments.clone(),
-                            statement,
-                            document,
-                            variable_span: identifier.span,
-                        });
+                        analyzed_block.variables.insert(
+                            identifier.name,
+                            AnalyzedVariable {
+                                assignments: [(
+                                    identifier.span,
+                                    AnalyzedAssignment {
+                                        name: identifier.name,
+                                        comments: assignment.comments.clone(),
+                                        statement,
+                                        document,
+                                        variable_span: identifier.span,
+                                    },
+                                )]
+                                .into(),
+                            },
+                        );
                     }
                 }
                 Statement::Call(call) => match call.function.name {
@@ -197,13 +218,16 @@ impl ShallowAnalyzer {
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
                             if is_exported(name) {
-                                analyzed_block.templates.insert(AnalyzedTemplate {
+                                analyzed_block.templates.insert(
                                     name,
-                                    comments: call.comments.clone(),
-                                    document,
-                                    header: call.function.span,
-                                    span: call.span,
-                                });
+                                    AnalyzedTemplate {
+                                        name,
+                                        comments: call.comments.clone(),
+                                        document,
+                                        header: call.function.span,
+                                        span: call.span,
+                                    },
+                                );
                             }
                         }
                     }
@@ -234,13 +258,22 @@ impl ShallowAnalyzer {
                             for string in strings {
                                 if let Some(name) = parse_simple_literal(string.raw_value) {
                                     if is_exported(name) {
-                                        analyzed_block.scope.insert(AnalyzedAssignment {
+                                        analyzed_block.variables.insert(
                                             name,
-                                            comments: Comments::default(),
-                                            statement,
-                                            document,
-                                            variable_span: string.span,
-                                        });
+                                            AnalyzedVariable {
+                                                assignments: [(
+                                                    string.span,
+                                                    AnalyzedAssignment {
+                                                        name,
+                                                        comments: Comments::default(),
+                                                        statement,
+                                                        document,
+                                                        variable_span: string.span,
+                                                    },
+                                                )]
+                                                .into(),
+                                            },
+                                        );
                                     }
                                 }
                             }
@@ -252,13 +285,16 @@ impl ShallowAnalyzer {
                             .and_then(|expr| expr.as_primary_string())
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
-                            analyzed_block.targets.insert(AnalyzedTarget {
+                            analyzed_block.targets.insert(
                                 name,
-                                call,
-                                document,
-                                header: call.args[0].span(),
-                                span: call.span,
-                            });
+                                AnalyzedTarget {
+                                    name,
+                                    call,
+                                    document,
+                                    header: call.args[0].span(),
+                                    span: call.span,
+                                },
+                            );
                         }
                     }
                 },

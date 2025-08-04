@@ -40,11 +40,11 @@ fn test_analyze_smoke() {
         .iter()
         .all(|s| !matches!(s, Statement::Error(_))));
 
-    // Inspect the top-level scope.
-    let scope = file.scope_at(0);
-    assert!(scope.get("enable_opt").is_some());
-    assert!(scope.get("_lib").is_some());
-    assert!(scope.get("is_linux").is_some());
+    // Inspect the top-level variables.
+    let variables = file.variables_at(0);
+    assert!(variables.get("enable_opt").is_some());
+    assert!(variables.get("_lib").is_some());
+    assert!(variables.get("is_linux").is_some());
 }
 
 #[test]

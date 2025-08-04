@@ -97,7 +97,7 @@ impl<T> Iterator for FilterWalk<'_, '_, T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Statement<'i> {
     Assignment(Box<Assignment<'i>>),
     Call(Box<Call<'i>>),
@@ -133,7 +133,7 @@ impl<'i> Node<'i> for Statement<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LValue<'i> {
     Identifier(Box<Identifier<'i>>),
     ArrayAccess(Box<ArrayAccess<'i>>),
@@ -162,7 +162,7 @@ impl<'i> Node<'i> for LValue<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Assignment<'i> {
     pub lvalue: LValue<'i>,
     pub op: AssignOp,
@@ -185,7 +185,7 @@ impl<'i> Node<'i> for Assignment<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Call<'i> {
     pub function: Identifier<'i>,
     pub args: Vec<Expr<'i>>,
@@ -223,7 +223,7 @@ impl<'i> Node<'i> for Call<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Condition<'i> {
     pub condition: Box<Expr<'i>>,
     pub then_block: Block<'i>,
@@ -251,7 +251,7 @@ impl<'i> Node<'i> for Condition<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Block<'i> {
     pub statements: Vec<Statement<'i>>,
     pub span: Span<'i>,
@@ -274,7 +274,7 @@ impl<'i> Node<'i> for Block<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArrayAccess<'i> {
     pub array: Identifier<'i>,
     pub index: Box<Expr<'i>>,
@@ -295,7 +295,7 @@ impl<'i> Node<'i> for ArrayAccess<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScopeAccess<'i> {
     pub scope: Identifier<'i>,
     pub member: Identifier<'i>,
@@ -316,7 +316,7 @@ impl<'i> Node<'i> for ScopeAccess<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expr<'i> {
     Primary(Box<PrimaryExpr<'i>>),
     Unary(Box<UnaryExpr<'i>>),
@@ -368,7 +368,7 @@ impl<'i> Node<'i> for Expr<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PrimaryExpr<'i> {
     Identifier(Box<Identifier<'i>>),
     Integer(Box<IntegerLiteral<'i>>),
@@ -418,7 +418,7 @@ impl<'i> Node<'i> for PrimaryExpr<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnaryExpr<'i> {
     pub op: UnaryOp,
     pub expr: Box<Expr<'i>>,
@@ -439,7 +439,7 @@ impl<'i> Node<'i> for UnaryExpr<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BinaryExpr<'i> {
     pub lhs: Box<Expr<'i>>,
     pub op: BinaryOp,
@@ -461,7 +461,7 @@ impl<'i> Node<'i> for BinaryExpr<'i> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AssignOp {
     Assign,
     AddAssign,
@@ -478,12 +478,12 @@ impl std::fmt::Display for AssignOp {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnaryOp {
     Not,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -497,7 +497,7 @@ pub enum BinaryOp {
     Or,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Identifier<'i> {
     pub name: &'i str,
     pub span: Span<'i>,
@@ -521,7 +521,7 @@ impl<'i> Node<'i> for Identifier<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegerLiteral<'i> {
     pub value: i64,
     pub span: Span<'i>,
@@ -541,7 +541,7 @@ impl<'i> Node<'i> for IntegerLiteral<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StringLiteral<'i> {
     pub raw_value: &'i str,
     pub embedded_exprs: Vec<Expr<'i>>,
@@ -569,7 +569,7 @@ impl<'i> Node<'i> for StringLiteral<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParenExpr<'i> {
     pub expr: Box<Expr<'i>>,
     pub span: Span<'i>,
@@ -589,7 +589,7 @@ impl<'i> Node<'i> for ParenExpr<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ListLiteral<'i> {
     pub values: Vec<Expr<'i>>,
     pub span: Span<'i>,
@@ -609,7 +609,7 @@ impl<'i> Node<'i> for ListLiteral<'i> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorRef<'i, 'n> {
     Statement(&'n ErrorStatement<'i>),
     PrimaryExpr(&'n ErrorPrimaryExpr<'i>),
@@ -651,7 +651,7 @@ impl<'i, 'n> Node<'i> for ErrorRef<'i, 'n> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ErrorStatement<'i> {
     UnknownStatement(Box<UnknownStatement<'i>>),
     UnmatchedBrace(Box<UnmatchedBrace<'i>>),
@@ -690,7 +690,7 @@ impl<'i> Node<'i> for ErrorStatement<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnknownStatement<'i> {
     pub text: &'i str,
     pub span: Span<'i>,
@@ -716,7 +716,7 @@ impl<'i> Node<'i> for UnknownStatement<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnmatchedBrace<'i> {
     pub span: Span<'i>,
 }
@@ -741,7 +741,7 @@ impl<'i> Node<'i> for UnmatchedBrace<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ErrorPrimaryExpr<'i> {
     MissingComma(Box<MissingComma<'i>>),
 }
@@ -776,7 +776,7 @@ impl<'i> Node<'i> for ErrorPrimaryExpr<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MissingComma<'i> {
     pub span: Span<'i>,
 }
@@ -801,7 +801,7 @@ impl<'i> Node<'i> for MissingComma<'i> {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Comments<'i> {
     pub lines: Vec<&'i str>,
 }

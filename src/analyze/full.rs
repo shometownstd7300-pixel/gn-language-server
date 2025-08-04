@@ -54,8 +54,12 @@ impl FullAnalyzer {
         }
     }
 
-    pub fn cached_files(&self) -> Vec<Pin<Arc<AnalyzedFile>>> {
-        self.cache.values().cloned().collect()
+    pub fn get_shallow(&self) -> &ShallowAnalyzer {
+        &self.shallow_analyzer
+    }
+
+    pub fn get_shallow_mut(&mut self) -> &mut ShallowAnalyzer {
+        &mut self.shallow_analyzer
     }
 
     pub fn analyze(

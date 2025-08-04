@@ -134,18 +134,18 @@ pub async fn completion(
         return Ok(None);
     }
 
-    let scope = current_file.scope_at(offset);
+    let variables = current_file.variables_at(offset);
     let templates = current_file.templates_at(offset);
 
     // Enumerate variables at the current scope.
-    let variable_items = scope
-        .all_variables()
+    let variable_items = variables
+        .all_items()
         .into_iter()
         .filter_map(|(name, variable)| {
-            let first_assignment = variable
+            let (_, first_assignment) = variable
                 .assignments
                 .iter()
-                .sorted_by_key(|a| (&a.document.path, a.statement.span().start()))
+                .sorted_by_key(|(_, a)| (&a.document.path, a.statement.span().start()))
                 .next()?;
             let single_assignment = variable.assignments.len() == 1;
             let snippet = if single_assignment {
@@ -185,7 +185,7 @@ pub async fn completion(
         });
 
     // Enumerate templates defined at the current position.
-    let template_items = templates.iter().map(|template| {
+    let template_items = templates.all_items().into_values().map(|template| {
         let doc_header = format!("```gn\ntemplate(\"{}\") {{ ... }}\n```\n", template.name);
 
         let doc_comments = if template.comments.is_empty() {

@@ -64,11 +64,23 @@ impl Analyzer {
         self.workspace_for(path)?.analyze(path, cache_config)
     }
 
-    pub fn cached_files(&self, workspace_root: &Path) -> Vec<Pin<Arc<AnalyzedFile>>> {
+    pub fn analyze_shallow(
+        &mut self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
+        if !path.is_absolute() {
+            return Err(Error::General("Path must be absolute".to_string()));
+        }
+        self.workspace_for(path)?
+            .analyze_shallow(path, cache_config)
+    }
+
+    pub fn cached_files(&self, workspace_root: &Path) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
         let Some(workspace) = self.workspaces.get(workspace_root) else {
             return Vec::new();
         };
-        workspace.analyzer.cached_files()
+        workspace.analyzer.get_shallow().cached_files()
     }
 
     fn workspace_for(&mut self, path: &Path) -> Result<&mut WorkspaceAnalyzer> {
@@ -126,5 +138,13 @@ impl WorkspaceAnalyzer {
         cache_config: CacheConfig,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
         self.analyzer.analyze(path, cache_config)
+    }
+
+    pub fn analyze_shallow(
+        &mut self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
+        self.analyzer.get_shallow_mut().analyze(path, cache_config)
     }
 }

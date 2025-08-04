@@ -106,8 +106,7 @@ pub async fn goto_definition(
     links.extend(
         current_file
             .templates_at(ident.span.start())
-            .into_iter()
-            .filter(|template| template.name == ident.name)
+            .get(ident.name)
             .map(|template| LocationLink {
                 origin_selection_range: Some(current_file.document.line_index.range(ident.span)),
                 target_uri: Url::from_file_path(&template.document.path).unwrap(),
@@ -117,9 +116,9 @@ pub async fn goto_definition(
     );
 
     // Check variables.
-    let scope = current_file.scope_at(ident.span.start());
-    if let Some(variable) = scope.get(ident.name) {
-        links.extend(variable.assignments.iter().map(|assignment| {
+    let variables = current_file.variables_at(ident.span.start());
+    if let Some(variable) = variables.get(ident.name) {
+        links.extend(variable.assignments.values().map(|assignment| {
             LocationLink {
                 origin_selection_range: Some(current_file.document.line_index.range(ident.span)),
                 target_uri: Url::from_file_path(&assignment.document.path).unwrap(),

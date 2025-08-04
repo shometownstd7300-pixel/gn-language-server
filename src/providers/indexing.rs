@@ -23,11 +23,6 @@ fn contains_args_gn(entry: &DirEntry) -> bool {
     entry.file_type().is_dir() && entry.path().join("args.gn").exists()
 }
 
-async fn index_file(path: &Path, context: &RequestContext) {
-    let mut analyzer = context.analyzer.lock().unwrap();
-    analyzer.analyze(path, context.cache_config).ok();
-}
-
 pub async fn index(context: &RequestContext, workspace_root: &Path) {
     context
         .client
@@ -50,7 +45,10 @@ pub async fn index(context: &RequestContext, workspace_root: &Path) {
             .to_str()
             .is_some_and(|name| name.ends_with(".gn") || name.ends_with(".gni"))
         {
-            index_file(entry.path(), context).await;
+            let mut analyzer = context.analyzer.lock().unwrap();
+            analyzer
+                .analyze_shallow(entry.path(), context.cache_config)
+                .ok();
             count += 1;
         }
     }
