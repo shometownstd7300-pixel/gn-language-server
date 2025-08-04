@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, RwLock},
@@ -104,25 +104,49 @@ impl ShallowAnalyzedFile {
     }
 }
 
-pub struct ShallowAnalyzedBlock<'i, 'p> {
+#[derive(Default)]
+pub struct MutableShallowAnalyzedBlock<'i, 'p> {
     pub scope: AnalyzedScope<'i, 'p>,
+    pub templates: HashSet<AnalyzedTemplate<'i>>,
+    pub targets: HashSet<AnalyzedTarget<'i, 'p>>,
+}
+
+impl<'i, 'p> MutableShallowAnalyzedBlock<'i, 'p> {
+    pub fn new_top_level() -> Self {
+        Default::default()
+    }
+
+    pub fn merge(&mut self, other: &ShallowAnalyzedBlock<'i, 'p>) {
+        self.scope.merge(&other.scope);
+        self.templates.extend(other.templates.clone());
+        self.targets.extend(other.targets.clone());
+    }
+
+    pub fn import(&mut self, other: &ShallowAnalyzedBlock<'i, 'p>) {
+        self.scope.import(&other.scope);
+        self.templates.extend(other.templates.clone());
+        self.targets.extend(other.targets.clone());
+    }
+
+    pub fn finalize(self) -> ShallowAnalyzedBlock<'i, 'p> {
+        ShallowAnalyzedBlock {
+            scope: Arc::new(self.scope),
+            templates: self.templates,
+            targets: self.targets,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct ShallowAnalyzedBlock<'i, 'p> {
+    pub scope: Arc<AnalyzedScope<'i, 'p>>,
     pub templates: HashSet<AnalyzedTemplate<'i>>,
     pub targets: HashSet<AnalyzedTarget<'i, 'p>>,
 }
 
 impl ShallowAnalyzedBlock<'_, '_> {
     pub fn new_top_level() -> Self {
-        ShallowAnalyzedBlock {
-            scope: AnalyzedScope::new(None),
-            templates: HashSet::new(),
-            targets: HashSet::new(),
-        }
-    }
-
-    pub fn merge(&mut self, other: &Self, imported: bool) {
-        self.scope.merge(&other.scope, imported);
-        self.templates.extend(other.templates.clone());
-        self.targets.extend(other.targets.clone());
+        Default::default()
     }
 }
 
@@ -189,7 +213,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
     pub fn scope_at(
         &self,
         pos: usize,
-        parent: Option<Box<AnalyzedScope<'i, 'p>>>,
+        parent: Option<Arc<AnalyzedScope<'i, 'p>>>,
     ) -> AnalyzedScope<'i, 'p> {
         let mut scope = AnalyzedScope::new(parent);
 
@@ -200,7 +224,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                     scope.insert(assignment.clone());
                 }
                 AnalyzedEvent::Import(import) => {
-                    scope.merge(&import.file.analyzed_root.scope, true);
+                    scope.import(&import.file.analyzed_root.scope);
                 }
                 _ => {}
             }
@@ -210,7 +234,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         for event in self.top_level_events() {
             if let AnalyzedEvent::NewScope(block) = event {
                 if block.span.start() < pos && pos < block.span.end() {
-                    return block.scope_at(pos, Some(Box::new(scope)));
+                    return block.scope_at(pos, Some(Arc::new(scope)));
                 }
             }
         }
@@ -355,15 +379,18 @@ pub struct AnalyzedImport<'i> {
     pub span: Span<'i>,
 }
 
+#[derive(Default)]
 pub struct AnalyzedScope<'i, 'p> {
-    pub parent: Option<Box<AnalyzedScope<'i, 'p>>>,
+    pub parent: Option<Arc<AnalyzedScope<'i, 'p>>>,
+    pub imports: Vec<Arc<AnalyzedScope<'i, 'p>>>,
     pub variables: HashMap<&'i str, AnalyzedVariable<'i, 'p>>,
 }
 
 impl<'i, 'p> AnalyzedScope<'i, 'p> {
-    pub fn new(parent: Option<Box<AnalyzedScope<'i, 'p>>>) -> Self {
+    pub fn new(parent: Option<Arc<AnalyzedScope<'i, 'p>>>) -> Self {
         AnalyzedScope {
             parent,
+            imports: Vec::new(),
             variables: HashMap::new(),
         }
     }
@@ -372,52 +399,61 @@ impl<'i, 'p> AnalyzedScope<'i, 'p> {
         self.variables
             .get(name)
             .or_else(|| self.parent.as_ref().and_then(|p| p.get(name)))
+            .or_else(|| self.imports.iter().find_map(|import| import.get(name)))
     }
 
     pub fn insert(&mut self, assignment: AnalyzedAssignment<'i, 'p>) {
         self.variables
             .entry(assignment.name)
-            .or_insert_with(|| AnalyzedVariable {
-                assignments: HashSet::new(),
-                imported: false,
-            })
+            .or_default()
             .assignments
             .insert(assignment);
     }
 
-    pub fn merge(&mut self, other: &Self, imported: bool) {
+    pub fn merge(&mut self, other: &Self) {
         for (name, other_variable) in &other.variables {
-            let variable = self
-                .variables
+            self.variables
                 .entry(name)
-                .or_insert_with(|| AnalyzedVariable {
-                    assignments: HashSet::new(),
-                    imported,
-                });
-            variable
+                .or_default()
                 .assignments
                 .extend(other_variable.assignments.clone());
-            variable.imported |= imported;
         }
+        self.imports.extend(other.imports.clone());
+    }
+
+    pub fn import(&mut self, other: &Arc<AnalyzedScope<'i, 'p>>) {
+        self.imports.push(other.clone());
     }
 
     pub fn all_variables(&self) -> HashMap<&'i str, &AnalyzedVariable<'i, 'p>> {
-        let mut variables = if let Some(parent) = &self.parent {
-            parent.all_variables()
-        } else {
-            HashMap::new()
-        };
+        let mut variables = HashMap::new();
+        self.collect_variables(&mut variables, &mut Default::default());
+        variables
+    }
+
+    fn collect_variables<'s>(
+        &'s self,
+        variables: &mut HashMap<&'i str, &'s AnalyzedVariable<'i, 'p>>,
+        visited: &mut BTreeSet<*const Self>,
+    ) {
+        if !visited.insert(self as *const Self) {
+            return;
+        }
+        if let Some(parent) = &self.parent {
+            parent.collect_variables(variables, visited);
+        }
+        for import in &self.imports {
+            import.collect_variables(variables, visited);
+        }
         for (name, variable) in &self.variables {
             variables.insert(name, variable);
         }
-        variables
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct AnalyzedVariable<'i, 'p> {
     pub assignments: HashSet<AnalyzedAssignment<'i, 'p>>,
-    pub imported: bool,
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]

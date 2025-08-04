@@ -26,8 +26,8 @@ use either::Either;
 use crate::{
     analyze::{
         data::{
-            AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedBlock,
-            ShallowAnalyzedFile, WorkspaceContext,
+            AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, MutableShallowAnalyzedBlock,
+            ShallowAnalyzedBlock, ShallowAnalyzedFile, WorkspaceContext,
         },
         utils::compute_next_check,
     },
@@ -155,7 +155,7 @@ impl ShallowAnalyzer {
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<ShallowAnalyzedBlock<'i, 'p>> {
-        let mut analyzed_block = ShallowAnalyzedBlock::new_top_level();
+        let mut analyzed_block = MutableShallowAnalyzedBlock::new_top_level();
 
         for statement in &block.statements {
             match statement {
@@ -186,7 +186,7 @@ impl ShallowAnalyzer {
                                 .context
                                 .resolve_path(name, document.path.parent().unwrap());
                             let file = self.analyze_cached(&path, cache_config, visiting)?;
-                            analyzed_block.merge(&file.analyzed_root, true);
+                            analyzed_block.import(&file.analyzed_root);
                             deps.push(file);
                         }
                     }
@@ -209,16 +209,13 @@ impl ShallowAnalyzer {
                     }
                     DECLARE_ARGS | FOREACH => {
                         if let Some(block) = &call.block {
-                            analyzed_block.merge(
-                                &self.analyze_block(
-                                    block,
-                                    cache_config,
-                                    document,
-                                    deps,
-                                    visiting,
-                                )?,
-                                false,
-                            );
+                            analyzed_block.merge(&self.analyze_block(
+                                block,
+                                cache_config,
+                                document,
+                                deps,
+                                visiting,
+                            )?);
                         }
                     }
                     SET_DEFAULTS => {}
@@ -268,32 +265,26 @@ impl ShallowAnalyzer {
                 Statement::Condition(condition) => {
                     let mut current_condition = condition;
                     loop {
-                        analyzed_block.merge(
-                            &self.analyze_block(
-                                &current_condition.then_block,
-                                cache_config,
-                                document,
-                                deps,
-                                visiting,
-                            )?,
-                            false,
-                        );
+                        analyzed_block.merge(&self.analyze_block(
+                            &current_condition.then_block,
+                            cache_config,
+                            document,
+                            deps,
+                            visiting,
+                        )?);
                         match &current_condition.else_block {
                             None => break,
                             Some(Either::Left(next_condition)) => {
                                 current_condition = next_condition;
                             }
                             Some(Either::Right(block)) => {
-                                analyzed_block.merge(
-                                    &self.analyze_block(
-                                        block,
-                                        cache_config,
-                                        document,
-                                        deps,
-                                        visiting,
-                                    )?,
-                                    false,
-                                );
+                                analyzed_block.merge(&self.analyze_block(
+                                    block,
+                                    cache_config,
+                                    document,
+                                    deps,
+                                    visiting,
+                                )?);
                                 break;
                             }
                         }
@@ -303,6 +294,6 @@ impl ShallowAnalyzer {
             }
         }
 
-        Ok(analyzed_block)
+        Ok(analyzed_block.finalize())
     }
 }
