@@ -50,8 +50,7 @@ pub fn lookup_target_name_string_at(
             AnalyzedEvent::Target(target) => Some(target),
             _ => None,
         })
-        .filter(|target| target.header.start() < offset && offset < target.header.end())
-        .next()
+        .find(|target| target.header.start() < offset && offset < target.header.end())
 }
 
 /// Finds the position of a target.
