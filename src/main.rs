@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
+
+use crate::bench::run_bench;
+
 mod analyze;
 mod ast;
+mod bench;
 mod binary;
 mod builtins;
 mod client;
@@ -27,5 +32,9 @@ mod utils;
 
 #[tokio::main]
 async fn main() {
+    if let Ok(path) = std::env::var("GN_BENCH") {
+        run_bench(Path::new(&path));
+        return;
+    }
     server::run().await;
 }
