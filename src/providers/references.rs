@@ -19,6 +19,7 @@ use crate::{
     error::{Error, Result},
     providers::lookup_target_name_string_at,
     server::RequestContext,
+    utils::find_workspace_root,
 };
 
 fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Vec<&'i str> {
@@ -31,19 +32,28 @@ fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Ve
         .collect()
 }
 
-fn target_references(
+async fn target_references(
     context: &RequestContext,
     current_file: &AnalyzedFile,
     target_name: &str,
 ) -> Result<Option<Vec<Location>>> {
     let bad_prefixes = get_overlapping_targets(&current_file.analyzed_root, target_name);
 
+    // Wait for the workspace indexing to finish.
+    let workspace_root = find_workspace_root(&current_file.document.path)?;
+    let Some(indexed) = context.indexed.lock().unwrap().get(workspace_root).cloned() else {
+        return Err(Error::General(format!(
+            "Indexing for {} not started",
+            workspace_root.display()
+        )));
+    };
+    indexed.wait().await;
+
     let cached_files = context
         .analyzer
         .lock()
         .unwrap()
-        .workspace_cache_for(&current_file.document.path)?
-        .files();
+        .cached_files(workspace_root);
 
     let mut references: Vec<Location> = Vec::new();
     for file in cached_files {
@@ -100,19 +110,10 @@ pub async fn references(
         .unwrap()
         .analyze(&path, context.cache_config)?;
 
-    // Wait for the background indexing to finish.
-    let indexing = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .workspace_cache_for(&path)?
-        .indexing();
-    indexing.wait().await;
-
     let position = params.text_document_position.position;
 
     if let Some(target) = lookup_target_name_string_at(&current_file, position) {
-        return target_references(context, &current_file, target.name);
+        return target_references(context, &current_file, target.name).await;
     };
 
     Ok(None)

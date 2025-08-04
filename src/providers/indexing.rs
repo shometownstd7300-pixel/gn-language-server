@@ -28,30 +28,19 @@ async fn index_file(path: &Path, context: &RequestContext) {
     analyzer.analyze(path, context.cache_config).ok();
 }
 
-pub async fn index(context: &RequestContext, initiator_path: &Path) {
-    let (workspace, mut indexing) = {
-        let mut analyzer = context.analyzer.lock().unwrap();
-        let Ok(workspace_cache) = analyzer.workspace_cache_for(initiator_path) else {
-            return;
-        };
-        (
-            workspace_cache.context().root.clone(),
-            workspace_cache.indexing(),
-        )
-    };
-
+pub async fn index(context: &RequestContext, workspace_root: &Path) {
     context
         .client
         .log_message(
             MessageType::INFO,
-            format!("Indexing {} in the background...", workspace.display()),
+            format!("Indexing {} in the background...", workspace_root.display()),
         )
         .await;
 
     let start_time = Instant::now();
     let mut count = 0;
 
-    let walk = WalkDir::new(&workspace)
+    let walk = WalkDir::new(workspace_root)
         .into_iter()
         .filter_entry(|entry| !contains_args_gn(entry));
     for entry in walk {
@@ -73,12 +62,10 @@ pub async fn index(context: &RequestContext, initiator_path: &Path) {
             MessageType::INFO,
             format!(
                 "Finished indexing {}: processed {} files in {:.1}s",
-                workspace.display(),
+                workspace_root.display(),
                 count,
                 elapsed.as_secs_f64()
             ),
         )
         .await;
-
-    indexing.set();
 }

@@ -27,13 +27,14 @@ use crate::{
     analyze::utils::{compute_next_check, resolve_path},
     ast::{parse, Block, Call, Comments, Statement},
     error::Result,
-    storage::{Document, DocumentStorage},
+    storage::{Document, DocumentStorage, DocumentVersion},
     utils::CacheConfig,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorkspaceContext {
     pub root: PathBuf,
+    pub dot_gn_version: DocumentVersion,
     pub build_config: PathBuf,
 }
 
@@ -41,19 +42,10 @@ impl WorkspaceContext {
     pub fn resolve_path(&self, name: &str, current_dir: &Path) -> PathBuf {
         resolve_path(name, &self.root, current_dir)
     }
-
-    pub fn format_path(&self, path: &Path) -> String {
-        if let Ok(relative_path) = path.strip_prefix(&self.root) {
-            format!("//{}", relative_path.to_string_lossy())
-        } else {
-            path.to_string_lossy().to_string()
-        }
-    }
 }
 
 pub struct ShallowAnalyzedFile {
     pub document: Pin<Arc<Document>>,
-    pub workspace: WorkspaceContext,
     #[allow(unused)] // Backing analyzed_root
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
@@ -62,7 +54,7 @@ pub struct ShallowAnalyzedFile {
 }
 
 impl ShallowAnalyzedFile {
-    pub fn empty(path: &Path, workspace: &WorkspaceContext) -> Pin<Arc<Self>> {
+    pub fn empty(path: &Path) -> Pin<Arc<Self>> {
         let document = Arc::pin(Document::empty(path));
         let ast_root = Box::pin(parse(&document.data));
         let analyzed_root = ShallowAnalyzedBlock::new_top_level();
@@ -75,7 +67,6 @@ impl ShallowAnalyzedFile {
         let next_check = RwLock::new(compute_next_check(Instant::now(), document.version));
         Arc::pin(ShallowAnalyzedFile {
             document,
-            workspace: workspace.clone(),
             ast_root,
             analyzed_root,
             deps: Vec::new(),
@@ -137,7 +128,7 @@ impl ShallowAnalyzedBlock<'_, '_> {
 
 pub struct AnalyzedFile {
     pub document: Pin<Arc<Document>>,
-    pub workspace: WorkspaceContext,
+    pub workspace_root: PathBuf,
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
     pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,

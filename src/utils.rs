@@ -134,6 +134,10 @@ pub struct AsyncSignal {
 }
 
 impl AsyncSignal {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
     pub async fn wait(&self) {
         self.done.wait().await;
     }

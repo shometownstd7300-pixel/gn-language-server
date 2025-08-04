@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::{
-    collections::HashSet,
+    collections::{btree_map::Entry, BTreeMap},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -37,7 +37,7 @@ use crate::{
     client::TestableClient,
     error::RpcResult,
     storage::DocumentStorage,
-    utils::{find_workspace_root, CacheConfig},
+    utils::{find_workspace_root, AsyncSignal, CacheConfig},
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -50,6 +50,7 @@ pub enum RequestType {
 pub struct ServerContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Mutex<Analyzer>>,
+    pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
 }
 
@@ -61,6 +62,7 @@ impl ServerContext {
         Self {
             storage,
             analyzer,
+            indexed: Default::default(),
             client: TestableClient::new_for_testing(),
         }
     }
@@ -70,6 +72,7 @@ impl ServerContext {
         RequestContext {
             storage: self.storage.clone(),
             analyzer: self.analyzer.clone(),
+            indexed: self.indexed.clone(),
             client: self.client.clone(),
             cache_config: CacheConfig::new(update_shallow),
         }
@@ -80,6 +83,7 @@ impl ServerContext {
 pub struct RequestContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Mutex<Analyzer>>,
+    pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
     pub cache_config: CacheConfig,
 }
@@ -93,7 +97,6 @@ impl RequestContext {
 
 struct Backend {
     context: ServerContext,
-    indexed_workspaces: Mutex<HashSet<PathBuf>>,
 }
 
 impl Backend {
@@ -106,9 +109,9 @@ impl Backend {
             context: ServerContext {
                 storage: storage.clone(),
                 analyzer: analyzer.clone(),
+                indexed: Default::default(),
                 client,
             },
-            indexed_workspaces: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -155,14 +158,21 @@ impl LanguageServer for Backend {
             if let Ok(path) = params.text_document.uri.to_file_path() {
                 if let Ok(workspace_root) = find_workspace_root(&path) {
                     let workspace_root = workspace_root.to_path_buf();
-                    let do_index = {
-                        let mut indexed_workspaces = self.indexed_workspaces.lock().unwrap();
-                        indexed_workspaces.insert(workspace_root.clone())
+                    let maybe_indexed = match self
+                        .context
+                        .indexed
+                        .lock()
+                        .unwrap()
+                        .entry(workspace_root.clone())
+                    {
+                        Entry::Occupied(_) => None,
+                        Entry::Vacant(entry) => Some(entry.insert(AsyncSignal::new()).clone()),
                     };
-                    if do_index {
+                    if let Some(mut indexed) = maybe_indexed {
                         let context = context.clone();
                         spawn(async move {
-                            crate::providers::indexing::index(&context, &path).await;
+                            crate::providers::indexing::index(&context, &workspace_root).await;
+                            indexed.set();
                         });
                     }
                 }

@@ -25,52 +25,37 @@ use pest::Span;
 
 use crate::{
     analyze::{
-        dotgn::evaluate_dot_gn, links::collect_links, shallow::ShallowAnalyzer,
-        symbols::collect_symbols, utils::compute_next_check, AnalyzedAssignment, AnalyzedBlock,
-        AnalyzedEvent, AnalyzedFile, AnalyzedImport, AnalyzedLink, AnalyzedTarget,
-        AnalyzedTemplate, ShallowAnalyzedFile, WorkspaceContext,
+        links::collect_links, shallow::ShallowAnalyzer, symbols::collect_symbols,
+        utils::compute_next_check, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
+        AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedFile,
+        WorkspaceContext,
     },
     ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     error::{Error, Result},
-    storage::{Document, DocumentStorage, DocumentVersion},
-    utils::{find_workspace_root, parse_simple_literal, AsyncSignal, CacheConfig},
+    storage::{Document, DocumentStorage},
+    utils::{parse_simple_literal, CacheConfig},
 };
 
-pub struct WorkspaceCache {
-    dot_gn_version: DocumentVersion,
+pub struct FullAnalyzer {
     context: WorkspaceContext,
-    files: BTreeMap<PathBuf, Pin<Arc<AnalyzedFile>>>,
-    indexing: AsyncSignal,
-}
-
-impl WorkspaceCache {
-    pub fn context(&self) -> &WorkspaceContext {
-        &self.context
-    }
-
-    pub fn files(&self) -> Vec<Pin<Arc<AnalyzedFile>>> {
-        self.files.values().cloned().collect()
-    }
-
-    pub fn indexing(&self) -> AsyncSignal {
-        self.indexing.clone()
-    }
-}
-
-pub struct Analyzer {
     shallow_analyzer: ShallowAnalyzer,
     storage: Arc<Mutex<DocumentStorage>>,
-    cache: BTreeMap<PathBuf, WorkspaceCache>,
+    cache: BTreeMap<PathBuf, Pin<Arc<AnalyzedFile>>>,
 }
 
-impl Analyzer {
-    pub fn new(storage: &Arc<Mutex<DocumentStorage>>) -> Self {
+impl FullAnalyzer {
+    pub fn new(context: &WorkspaceContext, storage: &Arc<Mutex<DocumentStorage>>) -> Self {
         Self {
+            context: context.clone(),
             storage: storage.clone(),
-            shallow_analyzer: ShallowAnalyzer::new(storage),
+            shallow_analyzer: ShallowAnalyzer::new(context, storage),
             cache: BTreeMap::new(),
         }
+    }
+
+    pub fn cached_files(&self) -> Vec<Pin<Arc<AnalyzedFile>>> {
+        self.cache.values().cloned().collect()
     }
 
     pub fn analyze(
@@ -84,75 +69,27 @@ impl Analyzer {
         self.analyze_cached(path, cache_config)
     }
 
-    pub fn workspace_cache_for(&mut self, path: &Path) -> Result<&mut WorkspaceCache> {
-        let workspace_root = find_workspace_root(path)?;
-        let dot_gn_path = workspace_root.join(".gn");
-        let dot_gn_version = {
-            let storage = self.storage.lock().unwrap();
-            storage.read_version(&dot_gn_path)?
-        };
-
-        let cache_hit = self
-            .cache
-            .get(workspace_root)
-            .is_some_and(|workspace_cache| workspace_cache.dot_gn_version == dot_gn_version);
-        if cache_hit {
-            return Ok(self.cache.get_mut(workspace_root).unwrap());
-        }
-
-        let build_config = {
-            let storage = self.storage.lock().unwrap();
-            let document = storage.read(&dot_gn_path)?;
-            evaluate_dot_gn(workspace_root, &document.data)?
-        };
-
-        let context = WorkspaceContext {
-            root: workspace_root.to_path_buf(),
-            build_config,
-        };
-
-        let workspace_cache = WorkspaceCache {
-            dot_gn_version,
-            context,
-            files: BTreeMap::new(),
-            indexing: Default::default(),
-        };
-        Ok(self
-            .cache
-            .entry(workspace_root.to_path_buf())
-            .or_insert(workspace_cache))
-    }
-
     fn analyze_cached(
         &mut self,
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
-        let (cached_file, context) = {
-            let workspace_cache = self.workspace_cache_for(path)?;
-            (
-                workspace_cache.files.get(path).cloned(),
-                workspace_cache.context.clone(),
-            )
-        };
-        if let Some(cached_file) = cached_file {
+        if self.cache.contains_key(path) {
+            let cached_file = self.cache.get(path).unwrap();
             let storage = self.storage.lock().unwrap();
             if cached_file.is_fresh(cache_config, &storage)? {
-                return Ok(cached_file);
+                return Ok(cached_file.clone());
             }
         }
 
-        let new_file = self.analyze_uncached(path, &context, cache_config)?;
-        self.workspace_cache_for(path)?
-            .files
-            .insert(path.to_path_buf(), new_file.clone());
+        let new_file = self.analyze_uncached(path, cache_config)?;
+        self.cache.insert(path.to_path_buf(), new_file.clone());
         Ok(new_file)
     }
 
     fn analyze_uncached(
         &mut self,
         path: &Path,
-        workspace: &WorkspaceContext,
         cache_config: CacheConfig,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
         let document = self.storage.lock().unwrap().read(path)?;
@@ -160,12 +97,12 @@ impl Analyzer {
 
         let mut deps = Vec::new();
         let mut analyzed_root =
-            self.analyze_block(&ast_root, workspace, cache_config, &document, &mut deps)?;
+            self.analyze_block(&ast_root, cache_config, &document, &mut deps)?;
 
         // Insert a synthetic import of BUILDCONFIG.gn.
-        let dot_gn_file =
-            self.shallow_analyzer
-                .analyze(&workspace.build_config, workspace, cache_config)?;
+        let dot_gn_file = self
+            .shallow_analyzer
+            .analyze(&self.context.build_config, cache_config)?;
         analyzed_root.events.insert(
             0,
             AnalyzedEvent::Import(AnalyzedImport {
@@ -175,7 +112,7 @@ impl Analyzer {
         );
         deps.push(dot_gn_file);
 
-        let links = collect_links(&ast_root, path, workspace);
+        let links = collect_links(&ast_root, path, &self.context);
         let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
 
         // SAFETY: links' contents are backed by pinned document.
@@ -189,7 +126,7 @@ impl Analyzer {
 
         Ok(Arc::pin(AnalyzedFile {
             document,
-            workspace: workspace.clone(),
+            workspace_root: self.context.root.clone(),
             ast_root,
             analyzed_root,
             deps,
@@ -202,7 +139,6 @@ impl Analyzer {
     fn analyze_block<'i, 'p>(
         &mut self,
         block: &'p Block<'i>,
-        workspace: &WorkspaceContext,
         cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
@@ -228,7 +164,6 @@ impl Analyzer {
                         }));
                         events.extend(self.analyze_expr(
                             &assignment.rvalue,
-                            workspace,
                             cache_config,
                             document,
                             deps,
@@ -243,19 +178,17 @@ impl Analyzer {
                                     .and_then(|expr| expr.as_primary_string())
                                     .and_then(|s| parse_simple_literal(s.raw_value))
                                 {
-                                    let path = workspace
+                                    let path = self
+                                        .context
                                         .resolve_path(name, document.path.parent().unwrap());
-                                    let file = match self.shallow_analyzer.analyze(
-                                        &path,
-                                        workspace,
-                                        cache_config,
-                                    ) {
-                                        Err(err) if err.is_not_found() => {
-                                            // Ignore missing imports as they might be imported conditionally.
-                                            ShallowAnalyzedFile::empty(&path, workspace)
-                                        }
-                                        other => other?,
-                                    };
+                                    let file =
+                                        match self.shallow_analyzer.analyze(&path, cache_config) {
+                                            Err(err) if err.is_not_found() => {
+                                                // Ignore missing imports as they might be imported conditionally.
+                                                ShallowAnalyzedFile::empty(&path)
+                                            }
+                                            other => other?,
+                                        };
                                     deps.push(file.clone());
                                     Ok(vec![AnalyzedEvent::Import(AnalyzedImport {
                                         file,
@@ -283,7 +216,6 @@ impl Analyzer {
                                 if let Some(block) = &call.block {
                                     events.push(AnalyzedEvent::NewScope(self.analyze_block(
                                         block,
-                                        workspace,
                                         cache_config,
                                         document,
                                         deps,
@@ -293,13 +225,8 @@ impl Analyzer {
                             }
                             DECLARE_ARGS => {
                                 if let Some(block) = &call.block {
-                                    let analyzed_root = self.analyze_block(
-                                        block,
-                                        workspace,
-                                        cache_config,
-                                        document,
-                                        deps,
-                                    )?;
+                                    let analyzed_root =
+                                        self.analyze_block(block, cache_config, document, deps)?;
                                     Ok(vec![AnalyzedEvent::DeclareArgs(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -308,13 +235,7 @@ impl Analyzer {
                             FOREACH => {
                                 if let Some(block) = &call.block {
                                     Ok(self
-                                        .analyze_block(
-                                            block,
-                                            workspace,
-                                            cache_config,
-                                            document,
-                                            deps,
-                                        )?
+                                        .analyze_block(block, cache_config, document, deps)?
                                         .events)
                                 } else {
                                     Ok(Vec::new())
@@ -322,13 +243,8 @@ impl Analyzer {
                             }
                             SET_DEFAULTS => {
                                 if let Some(block) = &call.block {
-                                    let analyzed_root = self.analyze_block(
-                                        block,
-                                        workspace,
-                                        cache_config,
-                                        document,
-                                        deps,
-                                    )?;
+                                    let analyzed_root =
+                                        self.analyze_block(block, cache_config, document, deps)?;
                                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -381,7 +297,6 @@ impl Analyzer {
                                 if let Some(block) = &call.block {
                                     events.push(AnalyzedEvent::NewScope(self.analyze_block(
                                         block,
-                                        workspace,
                                         cache_config,
                                         document,
                                         deps,
@@ -398,14 +313,12 @@ impl Analyzer {
                         loop {
                             events.extend(self.analyze_expr(
                                 &current_condition.condition,
-                                workspace,
                                 cache_config,
                                 document,
                                 deps,
                             )?);
                             condition_blocks.push(self.analyze_block(
                                 &current_condition.then_block,
-                                workspace,
                                 cache_config,
                                 document,
                                 deps,
@@ -418,7 +331,6 @@ impl Analyzer {
                                 Some(Either::Right(block)) => {
                                     condition_blocks.push(self.analyze_block(
                                         block,
-                                        workspace,
                                         cache_config,
                                         document,
                                         deps,
@@ -447,7 +359,6 @@ impl Analyzer {
     fn analyze_expr<'i, 'p>(
         &mut self,
         expr: &'p Expr<'i>,
-        workspace: &WorkspaceContext,
         cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
@@ -455,35 +366,32 @@ impl Analyzer {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
-                    let analyzed_root =
-                        self.analyze_block(block, workspace, cache_config, document, deps)?;
+                    let analyzed_root = self.analyze_block(block, cache_config, document, deps)?;
                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                 }
                 PrimaryExpr::Call(call) => {
                     let mut events: Vec<AnalyzedEvent> = call
                         .args
                         .iter()
-                        .map(|expr| {
-                            self.analyze_expr(expr, workspace, cache_config, document, deps)
-                        })
+                        .map(|expr| self.analyze_expr(expr, cache_config, document, deps))
                         .collect::<Result<Vec<_>>>()?
                         .into_iter()
                         .flatten()
                         .collect();
                     if let Some(block) = &call.block {
                         let analyzed_root =
-                            self.analyze_block(block, workspace, cache_config, document, deps)?;
+                            self.analyze_block(block, cache_config, document, deps)?;
                         events.push(AnalyzedEvent::NewScope(analyzed_root));
                     }
                     Ok(events)
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
-                    self.analyze_expr(&paren_expr.expr, workspace, cache_config, document, deps)
+                    self.analyze_expr(&paren_expr.expr, cache_config, document, deps)
                 }
                 PrimaryExpr::List(list_literal) => Ok(list_literal
                     .values
                     .iter()
-                    .map(|expr| self.analyze_expr(expr, workspace, cache_config, document, deps))
+                    .map(|expr| self.analyze_expr(expr, cache_config, document, deps))
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
                     .flatten()
@@ -496,18 +404,12 @@ impl Analyzer {
                 | PrimaryExpr::Error(_) => Ok(Vec::new()),
             },
             Expr::Unary(unary_expr) => {
-                self.analyze_expr(&unary_expr.expr, workspace, cache_config, document, deps)
+                self.analyze_expr(&unary_expr.expr, cache_config, document, deps)
             }
             Expr::Binary(binary_expr) => {
                 let mut events =
-                    self.analyze_expr(&binary_expr.lhs, workspace, cache_config, document, deps)?;
-                events.extend(self.analyze_expr(
-                    &binary_expr.rhs,
-                    workspace,
-                    cache_config,
-                    document,
-                    deps,
-                )?);
+                    self.analyze_expr(&binary_expr.lhs, cache_config, document, deps)?;
+                events.extend(self.analyze_expr(&binary_expr.rhs, cache_config, document, deps)?);
                 Ok(events)
             }
         }

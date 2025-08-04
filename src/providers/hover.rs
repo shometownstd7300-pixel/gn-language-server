@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
+
 use itertools::Itertools;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkedString, Url};
 
@@ -23,6 +25,14 @@ use crate::{
 };
 
 use super::lookup_identifier_at;
+
+fn format_path(path: &Path, workspace_root: &Path) -> String {
+    if let Ok(relative_path) = path.strip_prefix(workspace_root) {
+        format!("//{}", relative_path.to_string_lossy())
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
 
 pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Option<Hover>> {
     let Ok(path) = params
@@ -75,7 +85,7 @@ pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Opti
             .position(template.header.start());
         contents.push(MarkedString::from_markdown(format!(
             "Defined at [{}:{}:{}]({}#L{},{})",
-            current_file.workspace.format_path(&template.document.path),
+            format_path(&template.document.path, &current_file.workspace_root),
             position.line + 1,
             position.character + 1,
             Url::from_file_path(&template.document.path).unwrap(),
@@ -140,9 +150,10 @@ pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Opti
             contents.push(if single_assignment {
                 MarkedString::from_markdown(format!(
                     "Defined at [{}:{}:{}]({}#L{},{})",
-                    current_file
-                        .workspace
-                        .format_path(&first_assignment.document.path),
+                    format_path(
+                        &first_assignment.document.path,
+                        &current_file.workspace_root
+                    ),
                     position.line + 1,
                     position.character + 1,
                     Url::from_file_path(&first_assignment.document.path).unwrap(),

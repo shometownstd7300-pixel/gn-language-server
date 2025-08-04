@@ -55,13 +55,15 @@ fn make_loop_error(cycle: &[PathBuf]) -> Error {
 }
 
 pub struct ShallowAnalyzer {
+    context: WorkspaceContext,
     storage: Arc<Mutex<DocumentStorage>>,
     cache: BTreeMap<PathBuf, Pin<Arc<ShallowAnalyzedFile>>>,
 }
 
 impl ShallowAnalyzer {
-    pub fn new(storage: &Arc<Mutex<DocumentStorage>>) -> Self {
+    pub fn new(context: &WorkspaceContext, storage: &Arc<Mutex<DocumentStorage>>) -> Self {
         Self {
+            context: context.clone(),
             storage: storage.clone(),
             cache: BTreeMap::new(),
         }
@@ -70,28 +72,24 @@ impl ShallowAnalyzer {
     pub fn analyze(
         &mut self,
         path: &Path,
-        workspace: &WorkspaceContext,
         cache_config: CacheConfig,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
-        self.analyze_cached(path, workspace, cache_config, &mut Vec::new())
+        self.analyze_cached(path, cache_config, &mut Vec::new())
     }
 
     fn analyze_cached(
         &mut self,
         path: &Path,
-        workspace: &WorkspaceContext,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if let Some(cached_file) = self.cache.get(path) {
-            if &cached_file.workspace == workspace
-                && cached_file.is_fresh(cache_config, &self.storage.lock().unwrap())?
-            {
+            if cached_file.is_fresh(cache_config, &self.storage.lock().unwrap())? {
                 return Ok(cached_file.clone());
             }
         }
 
-        let new_file = self.analyze_uncached(path, workspace, cache_config, visiting)?;
+        let new_file = self.analyze_uncached(path, cache_config, visiting)?;
         self.cache.insert(path.to_path_buf(), new_file.clone());
 
         Ok(new_file)
@@ -100,7 +98,6 @@ impl ShallowAnalyzer {
     fn analyze_uncached(
         &mut self,
         path: &Path,
-        workspace: &WorkspaceContext,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
@@ -109,7 +106,7 @@ impl ShallowAnalyzer {
         }
 
         visiting.push(path.to_path_buf());
-        let result = self.analyze_uncached_inner(path, workspace, cache_config, visiting);
+        let result = self.analyze_uncached_inner(path, cache_config, visiting);
         visiting.pop();
         result
     }
@@ -117,7 +114,6 @@ impl ShallowAnalyzer {
     fn analyze_uncached_inner(
         &mut self,
         path: &Path,
-        workspace: &WorkspaceContext,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
@@ -125,20 +121,14 @@ impl ShallowAnalyzer {
             Ok(document) => document,
             Err(err) if err.is_not_found() => {
                 // Ignore missing imports as they might be imported conditionally.
-                return Ok(ShallowAnalyzedFile::empty(path, workspace));
+                return Ok(ShallowAnalyzedFile::empty(path));
             }
             Err(err) => return Err(err),
         };
         let ast_root = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
-        let analyzed_root = self.analyze_block(
-            &ast_root,
-            workspace,
-            cache_config,
-            &document,
-            &mut deps,
-            visiting,
-        )?;
+        let analyzed_root =
+            self.analyze_block(&ast_root, cache_config, &document, &mut deps, visiting)?;
 
         // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
         let analyzed_root = unsafe {
@@ -150,7 +140,6 @@ impl ShallowAnalyzer {
 
         Ok(Arc::pin(ShallowAnalyzedFile {
             document,
-            workspace: workspace.clone(),
             ast_root,
             analyzed_root,
             deps,
@@ -161,7 +150,6 @@ impl ShallowAnalyzer {
     fn analyze_block<'i, 'p>(
         &mut self,
         block: &'p Block<'i>,
-        workspace: &WorkspaceContext,
         cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
@@ -194,10 +182,10 @@ impl ShallowAnalyzer {
                             .and_then(|expr| expr.as_primary_string())
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
-                            let path =
-                                workspace.resolve_path(name, document.path.parent().unwrap());
-                            let file =
-                                self.analyze_cached(&path, workspace, cache_config, visiting)?;
+                            let path = self
+                                .context
+                                .resolve_path(name, document.path.parent().unwrap());
+                            let file = self.analyze_cached(&path, cache_config, visiting)?;
                             analyzed_block.merge(&file.analyzed_root, true);
                             deps.push(file);
                         }
@@ -224,7 +212,6 @@ impl ShallowAnalyzer {
                             analyzed_block.merge(
                                 &self.analyze_block(
                                     block,
-                                    workspace,
                                     cache_config,
                                     document,
                                     deps,
@@ -284,7 +271,6 @@ impl ShallowAnalyzer {
                         analyzed_block.merge(
                             &self.analyze_block(
                                 &current_condition.then_block,
-                                workspace,
                                 cache_config,
                                 document,
                                 deps,
@@ -301,7 +287,6 @@ impl ShallowAnalyzer {
                                 analyzed_block.merge(
                                     &self.analyze_block(
                                         block,
-                                        workspace,
                                         cache_config,
                                         document,
                                         deps,
