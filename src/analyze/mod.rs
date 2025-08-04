@@ -53,12 +53,11 @@ fn resolve_target<'s>(
     workspace: &WorkspaceContext,
 ) -> Option<(PathBuf, &'s str)> {
     if let Some((prefix, name)) = label.split_once(':') {
-        if prefix.is_empty() {
-            Some((current_path.to_path_buf(), name))
-        } else if let Some(rel_dir) = prefix.strip_prefix("//") {
+        if let Some(rel_dir) = prefix.strip_prefix("//") {
             Some((workspace.root.join(rel_dir).join("BUILD.gn"), name))
         } else {
-            None
+            let build_path = current_path.parent().unwrap().join(prefix).join("BUILD.gn");
+            build_path.exists().then_some((build_path, name))
         }
     } else if let Some(rel_dir) = label.strip_prefix("//") {
         if !rel_dir.is_empty() {
