@@ -22,10 +22,10 @@ use tokio::{
 use tower_lsp::lsp_types::{DocumentFormattingParams, TextEdit};
 
 use crate::{
-    analyze::find_workspace_root,
     binary::find_gn_binary,
     error::{Error, Result},
     server::RequestContext,
+    utils::find_workspace_root,
 };
 
 pub async fn formatting(

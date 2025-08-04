@@ -181,7 +181,7 @@ mod tests {
         Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
     };
 
-    use crate::{server::RequestType, testutil::testdata};
+    use crate::{server::RequestType, testutils::testdata};
 
     use super::*;
 

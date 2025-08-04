@@ -21,7 +21,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::{error::Result, util::LineIndex};
+use crate::{error::Result, utils::LineIndex};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DocumentVersion {

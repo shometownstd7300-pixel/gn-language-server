@@ -15,7 +15,7 @@
 use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
 
 use crate::{
-    analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, Link},
+    analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedLink},
     error::{Error, Result},
     providers::lookup_target_name_string_at,
     server::RequestContext,
@@ -48,7 +48,7 @@ fn target_references(
     let mut references: Vec<Location> = Vec::new();
     for file in cached_files {
         for link in &file.links {
-            let Link::Target { path, name, span } = link else {
+            let AnalyzedLink::Target { path, name, span } = link else {
                 continue;
             };
             if path != &current_file.document.path {

@@ -1,0 +1,515 @@
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::{Arc, Mutex, RwLock},
+    time::Instant,
+};
+
+use either::Either;
+use pest::Span;
+
+use crate::{
+    analyze::{
+        dotgn::evaluate_dot_gn, links::collect_links, shallow::ShallowAnalyzer,
+        symbols::collect_symbols, utils::compute_next_check, AnalyzedAssignment, AnalyzedBlock,
+        AnalyzedEvent, AnalyzedFile, AnalyzedImport, AnalyzedLink, AnalyzedTarget,
+        AnalyzedTemplate, ShallowAnalyzedFile, WorkspaceContext,
+    },
+    ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
+    builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
+    error::{Error, Result},
+    storage::{Document, DocumentStorage, DocumentVersion},
+    utils::{find_workspace_root, parse_simple_literal, AsyncSignal, CacheConfig},
+};
+
+pub struct WorkspaceCache {
+    dot_gn_version: DocumentVersion,
+    context: WorkspaceContext,
+    files: BTreeMap<PathBuf, Pin<Arc<AnalyzedFile>>>,
+    indexing: AsyncSignal,
+}
+
+impl WorkspaceCache {
+    pub fn context(&self) -> &WorkspaceContext {
+        &self.context
+    }
+
+    pub fn files(&self) -> Vec<Pin<Arc<AnalyzedFile>>> {
+        self.files.values().cloned().collect()
+    }
+
+    pub fn indexing(&self) -> AsyncSignal {
+        self.indexing.clone()
+    }
+}
+
+pub struct Analyzer {
+    shallow_analyzer: ShallowAnalyzer,
+    storage: Arc<Mutex<DocumentStorage>>,
+    cache: BTreeMap<PathBuf, WorkspaceCache>,
+}
+
+impl Analyzer {
+    pub fn new(storage: &Arc<Mutex<DocumentStorage>>) -> Self {
+        Self {
+            storage: storage.clone(),
+            shallow_analyzer: ShallowAnalyzer::new(storage),
+            cache: BTreeMap::new(),
+        }
+    }
+
+    pub fn analyze(
+        &mut self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Pin<Arc<AnalyzedFile>>> {
+        if !path.is_absolute() {
+            return Err(Error::General("Path must be absolute".to_string()));
+        }
+        self.analyze_cached(path, cache_config)
+    }
+
+    pub fn workspace_cache_for(&mut self, path: &Path) -> Result<&mut WorkspaceCache> {
+        let workspace_root = find_workspace_root(path)?;
+        let dot_gn_path = workspace_root.join(".gn");
+        let dot_gn_version = {
+            let storage = self.storage.lock().unwrap();
+            storage.read_version(&dot_gn_path)?
+        };
+
+        let cache_hit = self
+            .cache
+            .get(workspace_root)
+            .is_some_and(|workspace_cache| workspace_cache.dot_gn_version == dot_gn_version);
+        if cache_hit {
+            return Ok(self.cache.get_mut(workspace_root).unwrap());
+        }
+
+        let build_config = {
+            let storage = self.storage.lock().unwrap();
+            let document = storage.read(&dot_gn_path)?;
+            evaluate_dot_gn(workspace_root, &document.data)?
+        };
+
+        let context = WorkspaceContext {
+            root: workspace_root.to_path_buf(),
+            build_config,
+        };
+
+        let workspace_cache = WorkspaceCache {
+            dot_gn_version,
+            context,
+            files: BTreeMap::new(),
+            indexing: Default::default(),
+        };
+        Ok(self
+            .cache
+            .entry(workspace_root.to_path_buf())
+            .or_insert(workspace_cache))
+    }
+
+    fn analyze_cached(
+        &mut self,
+        path: &Path,
+        cache_config: CacheConfig,
+    ) -> Result<Pin<Arc<AnalyzedFile>>> {
+        let (cached_file, context) = {
+            let workspace_cache = self.workspace_cache_for(path)?;
+            (
+                workspace_cache.files.get(path).cloned(),
+                workspace_cache.context.clone(),
+            )
+        };
+        if let Some(cached_file) = cached_file {
+            let storage = self.storage.lock().unwrap();
+            if cached_file.is_fresh(cache_config, &storage)? {
+                return Ok(cached_file);
+            }
+        }
+
+        let new_file = self.analyze_uncached(path, &context, cache_config)?;
+        self.workspace_cache_for(path)?
+            .files
+            .insert(path.to_path_buf(), new_file.clone());
+        Ok(new_file)
+    }
+
+    fn analyze_uncached(
+        &mut self,
+        path: &Path,
+        workspace: &WorkspaceContext,
+        cache_config: CacheConfig,
+    ) -> Result<Pin<Arc<AnalyzedFile>>> {
+        let document = self.storage.lock().unwrap().read(path)?;
+        let ast_root = Box::pin(parse(&document.data));
+
+        let mut deps = Vec::new();
+        let mut analyzed_root =
+            self.analyze_block(&ast_root, workspace, cache_config, &document, &mut deps)?;
+
+        // Insert a synthetic import of BUILDCONFIG.gn.
+        let dot_gn_file =
+            self.shallow_analyzer
+                .analyze(&workspace.build_config, workspace, cache_config)?;
+        analyzed_root.events.insert(
+            0,
+            AnalyzedEvent::Import(AnalyzedImport {
+                file: dot_gn_file.clone(),
+                span: Span::new(&document.data, 0, 0).unwrap(),
+            }),
+        );
+        deps.push(dot_gn_file);
+
+        let links = collect_links(&ast_root, path, workspace);
+        let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
+
+        // SAFETY: links' contents are backed by pinned document.
+        let links = unsafe { std::mem::transmute::<Vec<AnalyzedLink>, Vec<AnalyzedLink>>(links) };
+        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
+        let analyzed_root =
+            unsafe { std::mem::transmute::<AnalyzedBlock, AnalyzedBlock>(analyzed_root) };
+        // SAFETY: ast_root's contents are backed by pinned document.
+        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
+        let next_check = RwLock::new(compute_next_check(Instant::now(), document.version));
+
+        Ok(Arc::pin(AnalyzedFile {
+            document,
+            workspace: workspace.clone(),
+            ast_root,
+            analyzed_root,
+            deps,
+            links,
+            symbols,
+            next_check,
+        }))
+    }
+
+    fn analyze_block<'i, 'p>(
+        &mut self,
+        block: &'p Block<'i>,
+        workspace: &WorkspaceContext,
+        cache_config: CacheConfig,
+        document: &'i Document,
+        deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
+    ) -> Result<AnalyzedBlock<'i, 'p>> {
+        let events: Vec<AnalyzedEvent> = block
+            .statements
+            .iter()
+            .map(|statement| -> Result<Vec<AnalyzedEvent>> {
+                match statement {
+                    Statement::Assignment(assignment) => {
+                        let mut events = Vec::new();
+                        let identifier = match &assignment.lvalue {
+                            LValue::Identifier(identifier) => identifier,
+                            LValue::ArrayAccess(array_access) => &array_access.array,
+                            LValue::ScopeAccess(scope_access) => &scope_access.scope,
+                        };
+                        events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
+                            name: identifier.name,
+                            comments: assignment.comments.clone(),
+                            statement,
+                            document,
+                            variable_span: identifier.span,
+                        }));
+                        events.extend(self.analyze_expr(
+                            &assignment.rvalue,
+                            workspace,
+                            cache_config,
+                            document,
+                            deps,
+                        )?);
+                        Ok(events)
+                    }
+                    Statement::Call(call) => {
+                        match call.function.name {
+                            IMPORT => {
+                                if let Some(name) = call
+                                    .only_arg()
+                                    .and_then(|expr| expr.as_primary_string())
+                                    .and_then(|s| parse_simple_literal(s.raw_value))
+                                {
+                                    let path = workspace
+                                        .resolve_path(name, document.path.parent().unwrap());
+                                    let file = match self.shallow_analyzer.analyze(
+                                        &path,
+                                        workspace,
+                                        cache_config,
+                                    ) {
+                                        Err(err) if err.is_not_found() => {
+                                            // Ignore missing imports as they might be imported conditionally.
+                                            ShallowAnalyzedFile::empty(&path, workspace)
+                                        }
+                                        other => other?,
+                                    };
+                                    deps.push(file.clone());
+                                    Ok(vec![AnalyzedEvent::Import(AnalyzedImport {
+                                        file,
+                                        span: call.span(),
+                                    })])
+                                } else {
+                                    Ok(Vec::new())
+                                }
+                            }
+                            TEMPLATE => {
+                                let mut events = Vec::new();
+                                if let Some(name) = call
+                                    .only_arg()
+                                    .and_then(|expr| expr.as_primary_string())
+                                    .and_then(|s| parse_simple_literal(s.raw_value))
+                                {
+                                    events.push(AnalyzedEvent::Template(AnalyzedTemplate {
+                                        name,
+                                        comments: call.comments.clone(),
+                                        document,
+                                        header: call.function.span,
+                                        span: call.span,
+                                    }));
+                                }
+                                if let Some(block) = &call.block {
+                                    events.push(AnalyzedEvent::NewScope(self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                    )?));
+                                }
+                                Ok(events)
+                            }
+                            DECLARE_ARGS => {
+                                if let Some(block) = &call.block {
+                                    let analyzed_root = self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                    )?;
+                                    Ok(vec![AnalyzedEvent::DeclareArgs(analyzed_root)])
+                                } else {
+                                    Ok(Vec::new())
+                                }
+                            }
+                            FOREACH => {
+                                if let Some(block) = &call.block {
+                                    Ok(self
+                                        .analyze_block(
+                                            block,
+                                            workspace,
+                                            cache_config,
+                                            document,
+                                            deps,
+                                        )?
+                                        .events)
+                                } else {
+                                    Ok(Vec::new())
+                                }
+                            }
+                            SET_DEFAULTS => {
+                                if let Some(block) = &call.block {
+                                    let analyzed_root = self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                    )?;
+                                    Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
+                                } else {
+                                    Ok(Vec::new())
+                                }
+                            }
+                            FORWARD_VARIABLES_FROM => {
+                                if let Some(strings) = call
+                                    .args
+                                    .get(1)
+                                    .and_then(|expr| expr.as_primary_list())
+                                    .map(|list| {
+                                        list.values
+                                            .iter()
+                                            .filter_map(|expr| expr.as_primary_string())
+                                            .collect::<Vec<_>>()
+                                    })
+                                {
+                                    return Ok(strings
+                                        .into_iter()
+                                        .filter_map(|string| {
+                                            parse_simple_literal(string.raw_value).map(|name| {
+                                                AnalyzedEvent::Assignment(AnalyzedAssignment {
+                                                    name,
+                                                    comments: Comments::default(),
+                                                    statement,
+                                                    document,
+                                                    variable_span: string.span,
+                                                })
+                                            })
+                                        })
+                                        .collect());
+                                }
+                                Ok(Vec::new())
+                            }
+                            _ => {
+                                let mut events = Vec::new();
+                                if let Some(name) = call
+                                    .only_arg()
+                                    .and_then(|expr| expr.as_primary_string())
+                                    .and_then(|s| parse_simple_literal(s.raw_value))
+                                {
+                                    events.push(AnalyzedEvent::Target(AnalyzedTarget {
+                                        name,
+                                        call,
+                                        document,
+                                        header: call.args[0].span(),
+                                        span: call.span,
+                                    }));
+                                }
+                                if let Some(block) = &call.block {
+                                    events.push(AnalyzedEvent::NewScope(self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                    )?));
+                                }
+                                Ok(events)
+                            }
+                        }
+                    }
+                    Statement::Condition(condition) => {
+                        let mut events = Vec::new();
+                        let mut condition_blocks = Vec::new();
+                        let mut current_condition = condition;
+                        loop {
+                            events.extend(self.analyze_expr(
+                                &current_condition.condition,
+                                workspace,
+                                cache_config,
+                                document,
+                                deps,
+                            )?);
+                            condition_blocks.push(self.analyze_block(
+                                &current_condition.then_block,
+                                workspace,
+                                cache_config,
+                                document,
+                                deps,
+                            )?);
+                            match &current_condition.else_block {
+                                None => break,
+                                Some(Either::Left(next_condition)) => {
+                                    current_condition = next_condition;
+                                }
+                                Some(Either::Right(block)) => {
+                                    condition_blocks.push(self.analyze_block(
+                                        block,
+                                        workspace,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                    )?);
+                                    break;
+                                }
+                            }
+                        }
+                        events.push(AnalyzedEvent::Conditions(condition_blocks));
+                        Ok(events)
+                    }
+                    Statement::Error(_) => Ok(Vec::new()),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        Ok(AnalyzedBlock {
+            events,
+            span: block.span,
+        })
+    }
+
+    fn analyze_expr<'i, 'p>(
+        &mut self,
+        expr: &'p Expr<'i>,
+        workspace: &WorkspaceContext,
+        cache_config: CacheConfig,
+        document: &'i Document,
+        deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
+    ) -> Result<Vec<AnalyzedEvent<'i, 'p>>> {
+        match expr {
+            Expr::Primary(primary_expr) => match primary_expr.as_ref() {
+                PrimaryExpr::Block(block) => {
+                    let analyzed_root =
+                        self.analyze_block(block, workspace, cache_config, document, deps)?;
+                    Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
+                }
+                PrimaryExpr::Call(call) => {
+                    let mut events: Vec<AnalyzedEvent> = call
+                        .args
+                        .iter()
+                        .map(|expr| {
+                            self.analyze_expr(expr, workspace, cache_config, document, deps)
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    if let Some(block) = &call.block {
+                        let analyzed_root =
+                            self.analyze_block(block, workspace, cache_config, document, deps)?;
+                        events.push(AnalyzedEvent::NewScope(analyzed_root));
+                    }
+                    Ok(events)
+                }
+                PrimaryExpr::ParenExpr(paren_expr) => {
+                    self.analyze_expr(&paren_expr.expr, workspace, cache_config, document, deps)
+                }
+                PrimaryExpr::List(list_literal) => Ok(list_literal
+                    .values
+                    .iter()
+                    .map(|expr| self.analyze_expr(expr, workspace, cache_config, document, deps))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect()),
+                PrimaryExpr::Identifier(_)
+                | PrimaryExpr::Integer(_)
+                | PrimaryExpr::String(_)
+                | PrimaryExpr::ArrayAccess(_)
+                | PrimaryExpr::ScopeAccess(_)
+                | PrimaryExpr::Error(_) => Ok(Vec::new()),
+            },
+            Expr::Unary(unary_expr) => {
+                self.analyze_expr(&unary_expr.expr, workspace, cache_config, document, deps)
+            }
+            Expr::Binary(binary_expr) => {
+                let mut events =
+                    self.analyze_expr(&binary_expr.lhs, workspace, cache_config, document, deps)?;
+                events.extend(self.analyze_expr(
+                    &binary_expr.rhs,
+                    workspace,
+                    cache_config,
+                    document,
+                    deps,
+                )?);
+                Ok(events)
+            }
+        }
+    }
+}

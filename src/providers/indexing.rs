@@ -80,5 +80,5 @@ pub async fn index(context: &RequestContext, initiator_path: &Path) {
         )
         .await;
 
-    indexing.mark_done();
+    indexing.set();
 }

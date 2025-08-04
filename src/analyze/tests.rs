@@ -17,8 +17,8 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    analyze::Analyzer, ast::Statement, storage::DocumentStorage, testutil::testdata,
-    util::CacheConfig,
+    analyze::Analyzer, ast::Statement, storage::DocumentStorage, testutils::testdata,
+    utils::CacheConfig,
 };
 
 #[test]

@@ -12,10 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Instant;
+use std::{path::Path, sync::Arc, time::Instant};
 
 use pest::Span;
+use tokio::sync::SetOnce;
 use tower_lsp::lsp_types::{Position, Range};
+
+use crate::error::{Error, Result};
+
+pub fn find_workspace_root(path: &Path) -> Result<&Path> {
+    for dir in path.ancestors().skip(1) {
+        if dir.join(".gn").try_exists()? {
+            return Ok(dir);
+        }
+    }
+    Err(Error::General(format!(
+        "Workspace not found for {}",
+        path.to_string_lossy()
+    )))
+}
 
 #[derive(Clone)]
 pub struct LineIndex<'i> {
@@ -110,6 +125,21 @@ pub fn parse_simple_literal(s: &str) -> Option<&str> {
         None
     } else {
         Some(s)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct AsyncSignal {
+    done: Arc<SetOnce<()>>,
+}
+
+impl AsyncSignal {
+    pub async fn wait(&self) {
+        self.done.wait().await;
+    }
+
+    pub fn set(&mut self) -> bool {
+        self.done.set(()).is_ok()
     }
 }
 

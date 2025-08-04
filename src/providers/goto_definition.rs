@@ -17,7 +17,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
-    analyze::Link,
+    analyze::AnalyzedLink,
     ast::Node,
     error::{Error, Result},
     providers::lookup_target_name_string_at,
@@ -60,8 +60,8 @@ pub async fn goto_definition(
             .find(|link| link.span().start() <= offset && offset <= link.span().end())
         {
             let (path, position) = match link {
-                Link::File { path, .. } => (path, Position::default()),
-                Link::Target { path, name, .. } => {
+                AnalyzedLink::File { path, .. } => (path, Position::default()),
+                AnalyzedLink::Target { path, name, .. } => {
                     let target_file = context
                         .analyzer
                         .lock()

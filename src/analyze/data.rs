@@ -17,48 +17,19 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, RwLock},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
+    analyze::utils::{compute_next_check, resolve_path},
     ast::{parse, Block, Call, Comments, Statement},
-    error::{Error, Result},
-    storage::{Document, DocumentStorage, DocumentVersion},
-    util::CacheConfig,
+    error::Result,
+    storage::{Document, DocumentStorage},
+    utils::CacheConfig,
 };
-
-const CHECK_INTERVAL: Duration = Duration::from_secs(5);
-
-pub fn compute_next_check(t: Instant, version: DocumentVersion) -> Instant {
-    match version {
-        DocumentVersion::OnDisk { .. } => t + CHECK_INTERVAL,
-        // Do not skip version checks for in-memory documents.
-        _ => t,
-    }
-}
-
-pub fn find_workspace_root(path: &Path) -> Result<&Path> {
-    for dir in path.ancestors().skip(1) {
-        if dir.join(".gn").try_exists()? {
-            return Ok(dir);
-        }
-    }
-    Err(Error::General(format!(
-        "Workspace not found for {}",
-        path.to_string_lossy()
-    )))
-}
-
-pub fn resolve_path(name: &str, root_dir: &Path, current_dir: &Path) -> PathBuf {
-    if let Some(rest) = name.strip_prefix("//") {
-        root_dir.join(rest)
-    } else {
-        current_dir.join(name)
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorkspaceContext {
@@ -170,7 +141,7 @@ pub struct AnalyzedFile {
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
     pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
-    pub links: Vec<Link<'static>>,
+    pub links: Vec<AnalyzedLink<'static>>,
     pub symbols: Vec<DocumentSymbol>,
     pub next_check: RwLock<Instant>,
 }
@@ -486,7 +457,7 @@ pub struct AnalyzedTarget<'i, 'p> {
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-pub enum Link<'i> {
+pub enum AnalyzedLink<'i> {
     /// Link to a file. No range is specified.
     File { path: PathBuf, span: Span<'i> },
     /// Link to a target defined in a BUILD.gn file.
@@ -497,11 +468,11 @@ pub enum Link<'i> {
     },
 }
 
-impl<'i> Link<'i> {
+impl<'i> AnalyzedLink<'i> {
     pub fn span(&self) -> Span<'i> {
         match self {
-            Link::File { span, .. } => *span,
-            Link::Target { span, .. } => *span,
+            AnalyzedLink::File { span, .. } => *span,
+            AnalyzedLink::Target { span, .. } => *span,
         }
     }
 }

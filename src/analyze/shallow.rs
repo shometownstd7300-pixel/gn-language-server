@@ -24,15 +24,18 @@ use std::{
 use either::Either;
 
 use crate::{
-    analyze::base::{
-        compute_next_check, AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate,
-        ShallowAnalyzedBlock, ShallowAnalyzedFile, WorkspaceContext,
+    analyze::{
+        data::{
+            AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedBlock,
+            ShallowAnalyzedFile, WorkspaceContext,
+        },
+        utils::compute_next_check,
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     error::{Error, Result},
     storage::{Document, DocumentStorage},
-    util::{parse_simple_literal, CacheConfig},
+    utils::{parse_simple_literal, CacheConfig},
 };
 
 fn is_exported(name: &str) -> bool {

@@ -22,8 +22,8 @@ mod error;
 mod providers;
 mod server;
 mod storage;
-mod testutil;
-mod util;
+mod testutils;
+mod utils;
 
 #[tokio::main]
 async fn main() {

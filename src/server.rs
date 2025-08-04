@@ -33,11 +33,11 @@ use tower_lsp::{
 };
 
 use crate::{
-    analyze::{find_workspace_root, Analyzer},
+    analyze::Analyzer,
     client::TestableClient,
     error::RpcResult,
     storage::DocumentStorage,
-    util::CacheConfig,
+    utils::{find_workspace_root, CacheConfig},
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

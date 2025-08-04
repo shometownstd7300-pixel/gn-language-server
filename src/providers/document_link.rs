@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use tower_lsp::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 
 use crate::{
-    analyze::Link,
+    analyze::AnalyzedLink,
     error::{Error, Result},
     server::RequestContext,
 };
@@ -51,13 +51,13 @@ pub async fn document_link(
         .links
         .iter()
         .map(|link| match link {
-            Link::File { path, span } => DocumentLink {
+            AnalyzedLink::File { path, span } => DocumentLink {
                 target: Some(Url::from_file_path(path).unwrap()),
                 range: current_file.document.line_index.range(*span),
                 tooltip: None,
                 data: None,
             },
-            Link::Target { path, name, span } => DocumentLink {
+            AnalyzedLink::Target { path, name, span } => DocumentLink {
                 target: None, // Resolve with positions later.
                 range: current_file.document.line_index.range(*span),
                 tooltip: None,
