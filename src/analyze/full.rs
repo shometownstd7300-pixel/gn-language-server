@@ -13,22 +13,26 @@
 // limitations under the License.
 
 use std::{
-    collections::BTreeMap,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, RwLock},
+    sync::Arc,
     time::Instant,
 };
 
 use either::Either;
+use futures::future::join_all;
+use itertools::Itertools;
 use pest::Span;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     analyze::{
-        links::collect_links, shallow::ShallowAnalyzer, symbols::collect_symbols,
-        utils::compute_next_check, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
-        AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedFile,
-        WorkspaceContext,
+        links::collect_links,
+        shallow::ShallowAnalyzer,
+        symbols::collect_symbols,
+        utils::{compute_next_check, FreshCache},
+        AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedImport,
+        AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedFile, WorkspaceContext,
     },
     ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
@@ -41,7 +45,7 @@ pub struct FullAnalyzer {
     context: WorkspaceContext,
     shallow_analyzer: ShallowAnalyzer,
     storage: Arc<Mutex<DocumentStorage>>,
-    cache: BTreeMap<PathBuf, Pin<Arc<AnalyzedFile>>>,
+    cache: FreshCache<PathBuf, Pin<Arc<AnalyzedFile>>>,
 }
 
 impl FullAnalyzer {
@@ -50,7 +54,7 @@ impl FullAnalyzer {
             context: context.clone(),
             storage: storage.clone(),
             shallow_analyzer: ShallowAnalyzer::new(context, storage),
-            cache: BTreeMap::new(),
+            cache: FreshCache::new(),
         }
     }
 
@@ -58,55 +62,52 @@ impl FullAnalyzer {
         &self.shallow_analyzer
     }
 
-    pub fn get_shallow_mut(&mut self) -> &mut ShallowAnalyzer {
-        &mut self.shallow_analyzer
-    }
-
-    pub fn analyze(
-        &mut self,
+    pub async fn analyze(
+        &self,
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
-        self.analyze_cached(path, cache_config)
+        self.analyze_cached(path, cache_config).await
     }
 
-    fn analyze_cached(
-        &mut self,
+    async fn analyze_cached(
+        &self,
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
-        if self.cache.contains_key(path) {
-            let cached_file = self.cache.get(path).unwrap();
-            let storage = self.storage.lock().unwrap();
-            if cached_file.is_fresh(cache_config, &storage)? {
-                return Ok(cached_file.clone());
-            }
-        }
-
-        let new_file = self.analyze_uncached(path, cache_config)?;
-        self.cache.insert(path.to_path_buf(), new_file.clone());
-        Ok(new_file)
+        self.cache
+            .get_or_insert(
+                path.to_path_buf(),
+                async |file| {
+                    file.is_fresh(cache_config, &*self.storage.lock().await)
+                        .await
+                },
+                async || self.analyze_uncached(path, cache_config).await,
+            )
+            .await
     }
 
-    fn analyze_uncached(
-        &mut self,
+    async fn analyze_uncached(
+        &self,
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
-        let document = self.storage.lock().unwrap().read(path)?;
+        let document = self.storage.lock().await.read(path)?;
         let ast_root = Box::pin(parse(&document.data));
 
         let mut deps = Vec::new();
-        let mut analyzed_root =
-            self.analyze_block(&ast_root, cache_config, &document, &mut deps)?;
+        let mut analyzed_root = self
+            .analyze_block(&ast_root, cache_config, &document, &mut deps)
+            .await?;
 
         // Insert a synthetic import of BUILDCONFIG.gn.
         let dot_gn_file = self
             .shallow_analyzer
-            .analyze(&self.context.build_config, cache_config)?;
+            .analyze(&self.context.build_config, cache_config)
+            .await?;
         analyzed_root.events.insert(
             0,
             AnalyzedEvent::Import(AnalyzedImport {
@@ -140,17 +141,15 @@ impl FullAnalyzer {
         }))
     }
 
-    fn analyze_block<'i, 'p>(
-        &mut self,
+    async fn analyze_block<'i, 'p>(
+        &self,
         block: &'p Block<'i>,
         cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     ) -> Result<AnalyzedBlock<'i, 'p>> {
-        let events: Vec<AnalyzedEvent> = block
-            .statements
-            .iter()
-            .map(|statement| -> Result<Vec<AnalyzedEvent>> {
+        let events: Vec<AnalyzedEvent> = join_all(block.statements.iter().map(
+            async move |statement| -> Result<Vec<AnalyzedEvent>> {
                 match statement {
                     Statement::Assignment(assignment) => {
                         let mut events = Vec::new();
@@ -166,13 +165,11 @@ impl FullAnalyzer {
                             document,
                             variable_span: identifier.span,
                         }));
-                        events.extend(self.analyze_expr(
-                            &assignment.rvalue,
-                            cache_config,
-                            document,
-                            deps,
-                        )?);
-                        Ok(events)
+                        events.extend(
+                            self.analyze_expr(&assignment.rvalue, cache_config, document, deps)
+                                .await?,
+                        );
+                        Result::<Vec<AnalyzedEvent>>::Ok(events)
                     }
                     Statement::Call(call) => {
                         match call.function.name {
@@ -185,14 +182,17 @@ impl FullAnalyzer {
                                     let path = self
                                         .context
                                         .resolve_path(name, document.path.parent().unwrap());
-                                    let file =
-                                        match self.shallow_analyzer.analyze(&path, cache_config) {
-                                            Err(err) if err.is_not_found() => {
-                                                // Ignore missing imports as they might be imported conditionally.
-                                                ShallowAnalyzedFile::empty(&path)
-                                            }
-                                            other => other?,
-                                        };
+                                    let file = match self
+                                        .shallow_analyzer
+                                        .analyze(&path, cache_config)
+                                        .await
+                                    {
+                                        Err(err) if err.is_not_found() => {
+                                            // Ignore missing imports as they might be imported conditionally.
+                                            ShallowAnalyzedFile::empty(&path)
+                                        }
+                                        other => other?,
+                                    };
                                     deps.push(file.clone());
                                     Ok(vec![AnalyzedEvent::Import(AnalyzedImport {
                                         file,
@@ -218,19 +218,18 @@ impl FullAnalyzer {
                                     }));
                                 }
                                 if let Some(block) = &call.block {
-                                    events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                        block,
-                                        cache_config,
-                                        document,
-                                        deps,
-                                    )?));
+                                    events.push(AnalyzedEvent::NewScope(
+                                        self.analyze_block(block, cache_config, document, deps)
+                                            .await?,
+                                    ));
                                 }
                                 Ok(events)
                             }
                             DECLARE_ARGS => {
                                 if let Some(block) = &call.block {
-                                    let analyzed_root =
-                                        self.analyze_block(block, cache_config, document, deps)?;
+                                    let analyzed_root = self
+                                        .analyze_block(block, cache_config, document, deps)
+                                        .await?;
                                     Ok(vec![AnalyzedEvent::DeclareArgs(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -239,7 +238,8 @@ impl FullAnalyzer {
                             FOREACH => {
                                 if let Some(block) = &call.block {
                                     Ok(self
-                                        .analyze_block(block, cache_config, document, deps)?
+                                        .analyze_block(block, cache_config, document, deps)
+                                        .await?
                                         .events)
                                 } else {
                                     Ok(Vec::new())
@@ -247,8 +247,9 @@ impl FullAnalyzer {
                             }
                             SET_DEFAULTS => {
                                 if let Some(block) = &call.block {
-                                    let analyzed_root =
-                                        self.analyze_block(block, cache_config, document, deps)?;
+                                    let analyzed_root = self
+                                        .analyze_block(block, cache_config, document, deps)
+                                        .await?;
                                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                                 } else {
                                     Ok(Vec::new())
@@ -299,12 +300,10 @@ impl FullAnalyzer {
                                     }));
                                 }
                                 if let Some(block) = &call.block {
-                                    events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                        block,
-                                        cache_config,
-                                        document,
-                                        deps,
-                                    )?));
+                                    events.push(AnalyzedEvent::NewScope(
+                                        self.analyze_block(block, cache_config, document, deps)
+                                            .await?,
+                                    ));
                                 }
                                 Ok(events)
                             }
@@ -315,30 +314,34 @@ impl FullAnalyzer {
                         let mut condition_blocks = Vec::new();
                         let mut current_condition = condition;
                         loop {
-                            events.extend(self.analyze_expr(
-                                &current_condition.condition,
-                                cache_config,
-                                document,
-                                deps,
-                            )?);
-                            condition_blocks.push(self.analyze_block(
-                                &current_condition.then_block,
-                                cache_config,
-                                document,
-                                deps,
-                            )?);
+                            events.extend(
+                                self.analyze_expr(
+                                    &current_condition.condition,
+                                    cache_config,
+                                    document,
+                                    deps,
+                                )
+                                .await?,
+                            );
+                            condition_blocks.push(
+                                self.analyze_block(
+                                    &current_condition.then_block,
+                                    cache_config,
+                                    document,
+                                    deps,
+                                )
+                                .await?,
+                            );
                             match &current_condition.else_block {
                                 None => break,
                                 Some(Either::Left(next_condition)) => {
                                     current_condition = next_condition;
                                 }
                                 Some(Either::Right(block)) => {
-                                    condition_blocks.push(self.analyze_block(
-                                        block,
-                                        cache_config,
-                                        document,
-                                        deps,
-                                    )?);
+                                    condition_blocks.push(
+                                        self.analyze_block(block, cache_config, document, deps)
+                                            .await?,
+                                    );
                                     break;
                                 }
                             }
@@ -348,11 +351,12 @@ impl FullAnalyzer {
                     }
                     Statement::Error(_) => Ok(Vec::new()),
                 }
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect();
+            },
+        ))
+        .await
+        .into_iter()
+        .flatten_ok()
+        .collect()?;
 
         Ok(AnalyzedBlock {
             events,
@@ -360,8 +364,8 @@ impl FullAnalyzer {
         })
     }
 
-    fn analyze_expr<'i, 'p>(
-        &mut self,
+    async fn analyze_expr<'i, 'p>(
+        &self,
         expr: &'p Expr<'i>,
         cache_config: CacheConfig,
         document: &'i Document,
@@ -370,36 +374,40 @@ impl FullAnalyzer {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
-                    let analyzed_root = self.analyze_block(block, cache_config, document, deps)?;
+                    let analyzed_root = self
+                        .analyze_block(block, cache_config, document, deps)
+                        .await?;
                     Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
                 }
                 PrimaryExpr::Call(call) => {
-                    let mut events: Vec<AnalyzedEvent> = call
-                        .args
-                        .iter()
-                        .map(|expr| self.analyze_expr(expr, cache_config, document, deps))
-                        .collect::<Result<Vec<_>>>()?
-                        .into_iter()
-                        .flatten()
-                        .collect();
+                    let mut events: Vec<AnalyzedEvent> = join_all(call.args.iter().map(|expr| {
+                        Box::pin(self.analyze_expr(expr, cache_config, document, deps))
+                    }))
+                    .await
+                    .into_iter()
+                    .flatten_ok()
+                    .collect::<Result<Vec<_>>>()?;
                     if let Some(block) = &call.block {
-                        let analyzed_root =
-                            self.analyze_block(block, cache_config, document, deps)?;
+                        let analyzed_root = self
+                            .analyze_block(block, cache_config, document, deps)
+                            .await?;
                         events.push(AnalyzedEvent::NewScope(analyzed_root));
                     }
                     Ok(events)
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
                     self.analyze_expr(&paren_expr.expr, cache_config, document, deps)
+                        .await
                 }
-                PrimaryExpr::List(list_literal) => Ok(list_literal
-                    .values
-                    .iter()
-                    .map(|expr| self.analyze_expr(expr, cache_config, document, deps))
-                    .collect::<Result<Vec<_>>>()?
+                PrimaryExpr::List(list_literal) => {
+                    Ok(join_all(list_literal.values.iter().map(async move |expr| {
+                        Box::pin(self.analyze_expr(expr, cache_config, document, deps)).await
+                    }))
+                    .await
                     .into_iter()
-                    .flatten()
-                    .collect()),
+                    .flatten_ok()
+                    .collect::<Result<Vec<_>>>()?)
+                }
                 PrimaryExpr::Identifier(_)
                 | PrimaryExpr::Integer(_)
                 | PrimaryExpr::String(_)
@@ -408,12 +416,16 @@ impl FullAnalyzer {
                 | PrimaryExpr::Error(_) => Ok(Vec::new()),
             },
             Expr::Unary(unary_expr) => {
-                self.analyze_expr(&unary_expr.expr, cache_config, document, deps)
+                Box::pin(self.analyze_expr(&unary_expr.expr, cache_config, document, deps)).await
             }
             Expr::Binary(binary_expr) => {
                 let mut events =
-                    self.analyze_expr(&binary_expr.lhs, cache_config, document, deps)?;
-                events.extend(self.analyze_expr(&binary_expr.rhs, cache_config, document, deps)?);
+                    Box::pin(self.analyze_expr(&binary_expr.lhs, cache_config, document, deps))
+                        .await?;
+                events.extend(
+                    Box::pin(self.analyze_expr(&binary_expr.rhs, cache_config, document, deps))
+                        .await?,
+                );
                 Ok(events)
             }
         }

@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use std::{
-    collections::BTreeMap,
     fmt::Write,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, RwLock},
+    sync::Arc,
     time::Instant,
 };
 
 use either::Either;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     analyze::{
@@ -31,7 +31,7 @@ use crate::{
             WorkspaceContext,
         },
         links::collect_links,
-        utils::compute_next_check,
+        utils::{compute_next_check, FreshCache},
         AnalyzedLink,
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},
@@ -60,7 +60,7 @@ fn make_loop_error(cycle: &[PathBuf]) -> Error {
 pub struct ShallowAnalyzer {
     context: WorkspaceContext,
     storage: Arc<Mutex<DocumentStorage>>,
-    cache: BTreeMap<PathBuf, Pin<Arc<ShallowAnalyzedFile>>>,
+    cache: FreshCache<PathBuf, Pin<Arc<ShallowAnalyzedFile>>>,
 }
 
 impl ShallowAnalyzer {
@@ -68,42 +68,43 @@ impl ShallowAnalyzer {
         Self {
             context: context.clone(),
             storage: storage.clone(),
-            cache: BTreeMap::new(),
+            cache: FreshCache::new(),
         }
     }
 
-    pub fn cached_files(&self) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
-        self.cache.values().cloned().collect()
+    pub async fn cached_files(&self) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
+        self.cache.ok_values().await
     }
 
-    pub fn analyze(
-        &mut self,
+    pub async fn analyze(
+        &self,
         path: &Path,
         cache_config: CacheConfig,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         self.analyze_cached(path, cache_config, &mut Vec::new())
+            .await
     }
 
-    fn analyze_cached(
-        &mut self,
+    async fn analyze_cached(
+        &self,
         path: &Path,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
-        if let Some(cached_file) = self.cache.get(path) {
-            if cached_file.is_fresh(cache_config, &self.storage.lock().unwrap())? {
-                return Ok(cached_file.clone());
-            }
-        }
-
-        let new_file = self.analyze_uncached(path, cache_config, visiting)?;
-        self.cache.insert(path.to_path_buf(), new_file.clone());
-
-        Ok(new_file)
+        self.cache
+            .get_or_insert(
+                path.to_path_buf(),
+                async |file| {
+                    file.is_fresh(cache_config, &*self.storage.lock().await)
+                        .await
+                },
+                async || self.analyze_uncached(path, cache_config, visiting).await,
+            )
+            .await
     }
 
-    fn analyze_uncached(
-        &mut self,
+    async fn analyze_uncached(
+        &self,
         path: &Path,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
@@ -113,18 +114,20 @@ impl ShallowAnalyzer {
         }
 
         visiting.push(path.to_path_buf());
-        let result = self.analyze_uncached_inner(path, cache_config, visiting);
+        let result = self
+            .analyze_uncached_inner(path, cache_config, visiting)
+            .await;
         visiting.pop();
         result
     }
 
-    fn analyze_uncached_inner(
-        &mut self,
+    async fn analyze_uncached_inner(
+        &self,
         path: &Path,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
-        let document = match self.storage.lock().unwrap().read(path) {
+        let document = match self.storage.lock().await.read(path) {
             Ok(document) => document,
             Err(err) if err.is_not_found() => {
                 // Ignore missing imports as they might be imported conditionally.
@@ -134,8 +137,9 @@ impl ShallowAnalyzer {
         };
         let ast_root = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
-        let analyzed_root =
-            self.analyze_block(&ast_root, cache_config, &document, &mut deps, visiting)?;
+        let analyzed_root = self
+            .analyze_block(&ast_root, cache_config, &document, &mut deps, visiting)
+            .await?;
 
         let links = collect_links(&ast_root, path, &self.context);
 
@@ -159,8 +163,8 @@ impl ShallowAnalyzer {
         }))
     }
 
-    fn analyze_block<'i, 'p>(
-        &mut self,
+    async fn analyze_block<'i, 'p>(
+        &self,
         block: &'p Block<'i>,
         cache_config: CacheConfig,
         document: &'i Document,
@@ -206,7 +210,8 @@ impl ShallowAnalyzer {
                             let path = self
                                 .context
                                 .resolve_path(name, document.path.parent().unwrap());
-                            let file = self.analyze_cached(&path, cache_config, visiting)?;
+                            let file = Box::pin(self.analyze_cached(&path, cache_config, visiting))
+                                .await?;
                             analyzed_block.import(&file.analyzed_root);
                             deps.push(file);
                         }
@@ -233,13 +238,16 @@ impl ShallowAnalyzer {
                     }
                     DECLARE_ARGS | FOREACH => {
                         if let Some(block) = &call.block {
-                            analyzed_block.merge(&self.analyze_block(
-                                block,
-                                cache_config,
-                                document,
-                                deps,
-                                visiting,
-                            )?);
+                            analyzed_block.merge(
+                                &Box::pin(self.analyze_block(
+                                    block,
+                                    cache_config,
+                                    document,
+                                    deps,
+                                    visiting,
+                                ))
+                                .await?,
+                            );
                         }
                     }
                     SET_DEFAULTS => {}
@@ -301,26 +309,32 @@ impl ShallowAnalyzer {
                 Statement::Condition(condition) => {
                     let mut current_condition = condition;
                     loop {
-                        analyzed_block.merge(&self.analyze_block(
-                            &current_condition.then_block,
-                            cache_config,
-                            document,
-                            deps,
-                            visiting,
-                        )?);
+                        analyzed_block.merge(
+                            &Box::pin(self.analyze_block(
+                                &current_condition.then_block,
+                                cache_config,
+                                document,
+                                deps,
+                                visiting,
+                            ))
+                            .await?,
+                        );
                         match &current_condition.else_block {
                             None => break,
                             Some(Either::Left(next_condition)) => {
                                 current_condition = next_condition;
                             }
                             Some(Either::Right(block)) => {
-                                analyzed_block.merge(&self.analyze_block(
-                                    block,
-                                    cache_config,
-                                    document,
-                                    deps,
-                                    visiting,
-                                )?);
+                                analyzed_block.merge(
+                                    &Box::pin(self.analyze_block(
+                                        block,
+                                        cache_config,
+                                        document,
+                                        deps,
+                                        visiting,
+                                    ))
+                                    .await?,
+                                );
                                 break;
                             }
                         }

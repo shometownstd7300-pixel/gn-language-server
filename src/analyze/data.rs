@@ -16,11 +16,12 @@ use std::{
     collections::{hash_map::Entry, BTreeSet, HashMap},
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Instant,
 };
 
 use pest::Span;
+use tokio::sync::RwLock;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
@@ -171,16 +172,20 @@ impl ShallowAnalyzedFile {
         })
     }
 
-    pub fn is_fresh(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> Result<bool> {
+    pub async fn is_fresh(
+        &self,
+        cache_config: CacheConfig,
+        storage: &DocumentStorage,
+    ) -> Result<bool> {
         if !cache_config.should_update_shallow() {
             return Ok(true);
         }
 
-        if cache_config.time() <= *self.next_check.read().unwrap() {
+        if cache_config.time() <= *self.next_check.read().await {
             return Ok(true);
         }
 
-        let mut next_check = self.next_check.write().unwrap();
+        let mut next_check = self.next_check.write().await;
         if cache_config.time() <= *next_check {
             return Ok(true);
         }
@@ -191,7 +196,7 @@ impl ShallowAnalyzedFile {
         }
 
         for dep in &self.deps {
-            if !dep.is_fresh(cache_config, storage)? {
+            if !Box::pin(dep.is_fresh(cache_config, storage)).await? {
                 return Ok(false);
             }
         }
@@ -258,12 +263,16 @@ pub struct AnalyzedFile {
 }
 
 impl AnalyzedFile {
-    pub fn is_fresh(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> Result<bool> {
-        if cache_config.time() <= *self.next_check.read().unwrap() {
+    pub async fn is_fresh(
+        &self,
+        cache_config: CacheConfig,
+        storage: &DocumentStorage,
+    ) -> Result<bool> {
+        if cache_config.time() <= *self.next_check.read().await {
             return Ok(true);
         }
 
-        let mut next_check = self.next_check.write().unwrap();
+        let mut next_check = self.next_check.write().await;
         if cache_config.time() <= *next_check {
             return Ok(true);
         }
@@ -274,7 +283,7 @@ impl AnalyzedFile {
         }
 
         for dep in &self.deps {
-            if !dep.is_fresh(cache_config, storage)? {
+            if !Box::pin(dep.is_fresh(cache_config, storage)).await? {
                 return Ok(false);
             }
         }
