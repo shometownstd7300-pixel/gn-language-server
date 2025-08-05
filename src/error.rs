@@ -25,27 +25,33 @@ fn new_rpc_error(message: String) -> RpcError {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug)]
 pub enum Error {
     #[error("{0}")]
     General(String),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("File not found")]
+    NotFound,
 }
 
 impl Error {
     pub fn is_not_found(&self) -> bool {
-        matches!(self, Error::Io(e) if e.kind() == ErrorKind::NotFound)
+        matches!(self, Error::NotFound)
     }
 }
 
 impl From<Error> for RpcError {
     fn from(error: Error) -> Self {
-        let message = match error {
-            Error::General(message) => message,
-            Error::Io(error) => error.to_string(),
-        };
-        new_rpc_error(message)
+        new_rpc_error(error.to_string())
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(error: std::io::Error) -> Self {
+        if error.kind() == ErrorKind::NotFound {
+            Error::NotFound
+        } else {
+            Error::General(error.to_string())
+        }
     }
 }
 
