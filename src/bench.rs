@@ -18,22 +18,17 @@ use std::{
     time::Instant,
 };
 
-use crate::{
-    analyze::Analyzer,
-    storage::DocumentStorage,
-    utils::{find_gn_files, CacheConfig},
-};
+use crate::{analyze::Analyzer, storage::DocumentStorage, utils::find_gn_files};
 
 pub fn run_bench(workspace_root: &Path) {
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
     let mut analyzer = Analyzer::new(&storage);
-    let cache_config = CacheConfig::new(false);
 
     let start_time = Instant::now();
     let mut count = 0;
 
     for path in find_gn_files(workspace_root) {
-        analyzer.analyze_shallow(&path, cache_config).ok();
+        analyzer.analyze_shallow(&path, start_time).ok();
         count += 1;
         eprint!(".");
     }

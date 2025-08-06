@@ -108,7 +108,7 @@ pub async fn references(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.cache_config)?;
+        .analyze(&path, context.request_time)?;
 
     let position = params.text_document_position.position;
 

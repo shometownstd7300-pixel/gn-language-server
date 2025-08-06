@@ -17,6 +17,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 pub use data::{
@@ -28,7 +29,7 @@ use crate::{
     analyze::{data::WorkspaceContext, dotgn::evaluate_dot_gn, full::FullAnalyzer},
     error::{Error, Result},
     storage::DocumentStorage,
-    utils::{find_workspace_root, CacheConfig},
+    utils::find_workspace_root,
 };
 
 mod data;
@@ -56,25 +57,25 @@ impl Analyzer {
     pub fn analyze(
         &mut self,
         path: &Path,
-        cache_config: CacheConfig,
+        request_time: Instant,
     ) -> Result<Pin<Arc<AnalyzedFile>>> {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
-        Ok(self.workspace_for(path)?.analyze(path, cache_config))
+        Ok(self.workspace_for(path)?.analyze(path, request_time))
     }
 
     pub fn analyze_shallow(
         &mut self,
         path: &Path,
-        cache_config: CacheConfig,
+        request_time: Instant,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
         Ok(self
             .workspace_for(path)?
-            .analyze_shallow(path, cache_config))
+            .analyze_shallow(path, request_time))
     }
 
     pub fn cached_files(&self, workspace_root: &Path) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
@@ -133,15 +134,15 @@ impl WorkspaceAnalyzer {
         }
     }
 
-    pub fn analyze(&mut self, path: &Path, cache_config: CacheConfig) -> Pin<Arc<AnalyzedFile>> {
-        self.analyzer.analyze(path, cache_config)
+    pub fn analyze(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
+        self.analyzer.analyze(path, request_time)
     }
 
     pub fn analyze_shallow(
         &mut self,
         path: &Path,
-        cache_config: CacheConfig,
+        request_time: Instant,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
-        self.analyzer.get_shallow_mut().analyze(path, cache_config)
+        self.analyzer.get_shallow_mut().analyze(path, request_time)
     }
 }

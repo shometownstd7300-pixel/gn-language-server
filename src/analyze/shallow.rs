@@ -16,7 +16,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
@@ -30,13 +30,13 @@ use crate::{
             WorkspaceContext,
         },
         links::collect_links,
-        utils::compute_next_verify,
+        utils::CachedVerifier,
         AnalyzedLink,
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     storage::{Document, DocumentStorage},
-    utils::{parse_simple_literal, CacheConfig},
+    utils::parse_simple_literal,
 };
 
 fn is_exported(name: &str) -> bool {
@@ -62,27 +62,26 @@ impl ShallowAnalyzer {
         self.cache.values().cloned().collect()
     }
 
-    pub fn analyze(
-        &mut self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Pin<Arc<ShallowAnalyzedFile>> {
-        self.analyze_cached(path, cache_config, &mut Vec::new())
+    pub fn analyze(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<ShallowAnalyzedFile>> {
+        self.analyze_cached(path, request_time, &mut Vec::new())
     }
 
     fn analyze_cached(
         &mut self,
         path: &Path,
-        cache_config: CacheConfig,
+        request_time: Instant,
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         if let Some(cached_file) = self.cache.get(path) {
-            if cached_file.maybe_verify(cache_config, &self.storage.lock().unwrap()) {
+            if cached_file
+                .verifier
+                .verify(request_time, &self.storage.lock().unwrap())
+            {
                 return cached_file.clone();
             }
         }
 
-        let new_file = self.analyze_uncached(path, cache_config, visiting);
+        let new_file = self.analyze_uncached(path, request_time, visiting);
         self.cache.insert(path.to_path_buf(), new_file.clone());
         new_file
     }
@@ -90,15 +89,15 @@ impl ShallowAnalyzer {
     fn analyze_uncached(
         &mut self,
         path: &Path,
-        cache_config: CacheConfig,
+        request_time: Instant,
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         if visiting.iter().any(|p| p == path) {
-            return ShallowAnalyzedFile::error(path);
+            return ShallowAnalyzedFile::error(path, request_time);
         }
 
         visiting.push(path.to_path_buf());
-        let result = self.analyze_uncached_inner(path, cache_config, visiting);
+        let result = self.analyze_uncached_inner(path, request_time, visiting);
         visiting.pop();
         result
     }
@@ -106,14 +105,14 @@ impl ShallowAnalyzer {
     fn analyze_uncached_inner(
         &mut self,
         path: &Path,
-        cache_config: CacheConfig,
+        request_time: Instant,
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         let document = self.storage.lock().unwrap().read(path);
         let ast_root = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
         let analyzed_root =
-            self.analyze_block(&ast_root, cache_config, &document, &mut deps, visiting);
+            self.analyze_block(&ast_root, request_time, &document, &mut deps, visiting);
 
         let links = collect_links(&ast_root, path, &self.context);
 
@@ -125,24 +124,16 @@ impl ShallowAnalyzer {
         };
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
-        let next_verify = RwLock::new(compute_next_verify(Instant::now(), document.version));
 
-        Arc::pin(ShallowAnalyzedFile {
-            document,
-            ast_root,
-            analyzed_root,
-            deps,
-            links,
-            next_verify,
-        })
+        ShallowAnalyzedFile::new(document, ast_root, analyzed_root, links, deps, request_time)
     }
 
     fn analyze_block<'i, 'p>(
         &mut self,
         block: &'p Block<'i>,
-        cache_config: CacheConfig,
+        request_time: Instant,
         document: &'i Document,
-        deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
+        deps: &mut Vec<Arc<CachedVerifier>>,
         visiting: &mut Vec<PathBuf>,
     ) -> ShallowAnalyzedBlock<'i, 'p> {
         let mut analyzed_block = MutableShallowAnalyzedBlock::new_top_level();
@@ -184,9 +175,9 @@ impl ShallowAnalyzer {
                             let path = self
                                 .context
                                 .resolve_path(name, document.path.parent().unwrap());
-                            let file = self.analyze_cached(&path, cache_config, visiting);
+                            let file = self.analyze_cached(&path, request_time, visiting);
                             analyzed_block.import(&file.analyzed_root);
-                            deps.push(file);
+                            deps.push(file.verifier.clone());
                         }
                     }
                     TEMPLATE => {
@@ -213,7 +204,7 @@ impl ShallowAnalyzer {
                         if let Some(block) = &call.block {
                             analyzed_block.merge(&self.analyze_block(
                                 block,
-                                cache_config,
+                                request_time,
                                 document,
                                 deps,
                                 visiting,
@@ -281,7 +272,7 @@ impl ShallowAnalyzer {
                     loop {
                         analyzed_block.merge(&self.analyze_block(
                             &current_condition.then_block,
-                            cache_config,
+                            request_time,
                             document,
                             deps,
                             visiting,
@@ -294,7 +285,7 @@ impl ShallowAnalyzer {
                             Some(Either::Right(block)) => {
                                 analyzed_block.merge(&self.analyze_block(
                                     block,
-                                    cache_config,
+                                    request_time,
                                     document,
                                     deps,
                                     visiting,

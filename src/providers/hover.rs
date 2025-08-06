@@ -51,7 +51,7 @@ pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Opti
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.cache_config)?;
+        .analyze(&path, context.request_time)?;
 
     let Some(ident) =
         lookup_identifier_at(&current_file, params.text_document_position_params.position)
@@ -187,7 +187,7 @@ mod tests {
         Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
     };
 
-    use crate::{server::RequestType, testutils::testdata};
+    use crate::testutils::testdata;
 
     use super::*;
 
@@ -205,12 +205,9 @@ mod tests {
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
 
-        let response = hover(
-            &RequestContext::new_for_testing(RequestType::Background),
-            params,
-        )
-        .await
-        .unwrap();
+        let response = hover(&RequestContext::new_for_testing(), params)
+            .await
+            .unwrap();
 
         assert_eq!(
             response,

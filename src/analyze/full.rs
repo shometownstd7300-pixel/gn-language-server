@@ -16,7 +16,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
@@ -26,14 +26,13 @@ use pest::Span;
 use crate::{
     analyze::{
         links::collect_links, shallow::ShallowAnalyzer, symbols::collect_symbols,
-        utils::compute_next_verify, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
-        AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedFile,
-        WorkspaceContext,
+        utils::CachedVerifier, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
+        AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
     },
     ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
     storage::{Document, DocumentStorage},
-    utils::{parse_simple_literal, CacheConfig},
+    utils::parse_simple_literal,
 };
 
 pub struct FullAnalyzer {
@@ -61,39 +60,35 @@ impl FullAnalyzer {
         &mut self.shallow_analyzer
     }
 
-    pub fn analyze(&mut self, path: &Path, cache_config: CacheConfig) -> Pin<Arc<AnalyzedFile>> {
-        self.analyze_cached(path, cache_config)
+    pub fn analyze(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
+        self.analyze_cached(path, request_time)
     }
 
-    fn analyze_cached(&mut self, path: &Path, cache_config: CacheConfig) -> Pin<Arc<AnalyzedFile>> {
+    fn analyze_cached(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
         if self.cache.contains_key(path) {
             let cached_file = self.cache.get(path).unwrap();
             let storage = self.storage.lock().unwrap();
-            if cached_file.maybe_verify(cache_config, &storage) {
+            if cached_file.verifier.verify(request_time, &storage) {
                 return cached_file.clone();
             }
         }
 
-        let new_file = self.analyze_uncached(path, cache_config);
+        let new_file = self.analyze_uncached(path, request_time);
         self.cache.insert(path.to_path_buf(), new_file.clone());
         new_file
     }
 
-    fn analyze_uncached(
-        &mut self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Pin<Arc<AnalyzedFile>> {
+    fn analyze_uncached(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
         let document = self.storage.lock().unwrap().read(path);
         let ast_root = Box::pin(parse(&document.data));
 
         let mut deps = Vec::new();
-        let mut analyzed_root = self.analyze_block(&ast_root, cache_config, &document, &mut deps);
+        let mut analyzed_root = self.analyze_block(&ast_root, request_time, &document, &mut deps);
 
         // Insert a synthetic import of BUILDCONFIG.gn.
         let dot_gn_file = self
             .shallow_analyzer
-            .analyze(&self.context.build_config, cache_config);
+            .analyze(&self.context.build_config, request_time);
         analyzed_root.events.insert(
             0,
             AnalyzedEvent::Import(AnalyzedImport {
@@ -101,7 +96,7 @@ impl FullAnalyzer {
                 span: Span::new(&document.data, 0, 0).unwrap(),
             }),
         );
-        deps.push(dot_gn_file);
+        deps.push(dot_gn_file.verifier.clone());
 
         let links = collect_links(&ast_root, path, &self.context);
         let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
@@ -113,26 +108,25 @@ impl FullAnalyzer {
             unsafe { std::mem::transmute::<AnalyzedBlock, AnalyzedBlock>(analyzed_root) };
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
-        let next_verify = RwLock::new(compute_next_verify(Instant::now(), document.version));
 
-        Arc::pin(AnalyzedFile {
+        AnalyzedFile::new(
             document,
-            workspace_root: self.context.root.clone(),
+            self.context.root.clone(),
             ast_root,
             analyzed_root,
-            deps,
             links,
             symbols,
-            next_verify,
-        })
+            deps,
+            request_time,
+        )
     }
 
     fn analyze_block<'i, 'p>(
         &mut self,
         block: &'p Block<'i>,
-        cache_config: CacheConfig,
+        request_time: Instant,
         document: &'i Document,
-        deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
+        deps: &mut Vec<Arc<CachedVerifier>>,
     ) -> AnalyzedBlock<'i, 'p> {
         let events: Vec<AnalyzedEvent> = block
             .statements
@@ -155,7 +149,7 @@ impl FullAnalyzer {
                         }));
                         events.extend(self.analyze_expr(
                             &assignment.rvalue,
-                            cache_config,
+                            request_time,
                             document,
                             deps,
                         ));
@@ -171,8 +165,8 @@ impl FullAnalyzer {
                                 let path = self
                                     .context
                                     .resolve_path(name, document.path.parent().unwrap());
-                                let file = self.shallow_analyzer.analyze(&path, cache_config);
-                                deps.push(file.clone());
+                                let file = self.shallow_analyzer.analyze(&path, request_time);
+                                deps.push(file.verifier.clone());
                                 vec![AnalyzedEvent::Import(AnalyzedImport {
                                     file,
                                     span: call.span(),
@@ -199,7 +193,7 @@ impl FullAnalyzer {
                             if let Some(block) = &call.block {
                                 events.push(AnalyzedEvent::NewScope(self.analyze_block(
                                     block,
-                                    cache_config,
+                                    request_time,
                                     document,
                                     deps,
                                 )));
@@ -209,7 +203,7 @@ impl FullAnalyzer {
                         DECLARE_ARGS => {
                             if let Some(block) = &call.block {
                                 let analyzed_root =
-                                    self.analyze_block(block, cache_config, document, deps);
+                                    self.analyze_block(block, request_time, document, deps);
                                 vec![AnalyzedEvent::DeclareArgs(analyzed_root)]
                             } else {
                                 Vec::new()
@@ -217,7 +211,7 @@ impl FullAnalyzer {
                         }
                         FOREACH => {
                             if let Some(block) = &call.block {
-                                self.analyze_block(block, cache_config, document, deps)
+                                self.analyze_block(block, request_time, document, deps)
                                     .events
                             } else {
                                 Vec::new()
@@ -226,7 +220,7 @@ impl FullAnalyzer {
                         SET_DEFAULTS => {
                             if let Some(block) = &call.block {
                                 let analyzed_root =
-                                    self.analyze_block(block, cache_config, document, deps);
+                                    self.analyze_block(block, request_time, document, deps);
                                 vec![AnalyzedEvent::NewScope(analyzed_root)]
                             } else {
                                 Vec::new()
@@ -279,7 +273,7 @@ impl FullAnalyzer {
                             if let Some(block) = &call.block {
                                 events.push(AnalyzedEvent::NewScope(self.analyze_block(
                                     block,
-                                    cache_config,
+                                    request_time,
                                     document,
                                     deps,
                                 )));
@@ -294,13 +288,13 @@ impl FullAnalyzer {
                         loop {
                             events.extend(self.analyze_expr(
                                 &current_condition.condition,
-                                cache_config,
+                                request_time,
                                 document,
                                 deps,
                             ));
                             condition_blocks.push(self.analyze_block(
                                 &current_condition.then_block,
-                                cache_config,
+                                request_time,
                                 document,
                                 deps,
                             ));
@@ -312,7 +306,7 @@ impl FullAnalyzer {
                                 Some(Either::Right(block)) => {
                                     condition_blocks.push(self.analyze_block(
                                         block,
-                                        cache_config,
+                                        request_time,
                                         document,
                                         deps,
                                     ));
@@ -337,35 +331,35 @@ impl FullAnalyzer {
     fn analyze_expr<'i, 'p>(
         &mut self,
         expr: &'p Expr<'i>,
-        cache_config: CacheConfig,
+        request_time: Instant,
         document: &'i Document,
-        deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
+        deps: &mut Vec<Arc<CachedVerifier>>,
     ) -> Vec<AnalyzedEvent<'i, 'p>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
-                    let analyzed_root = self.analyze_block(block, cache_config, document, deps);
+                    let analyzed_root = self.analyze_block(block, request_time, document, deps);
                     vec![AnalyzedEvent::NewScope(analyzed_root)]
                 }
                 PrimaryExpr::Call(call) => {
                     let mut events: Vec<AnalyzedEvent> = call
                         .args
                         .iter()
-                        .flat_map(|expr| self.analyze_expr(expr, cache_config, document, deps))
+                        .flat_map(|expr| self.analyze_expr(expr, request_time, document, deps))
                         .collect();
                     if let Some(block) = &call.block {
-                        let analyzed_root = self.analyze_block(block, cache_config, document, deps);
+                        let analyzed_root = self.analyze_block(block, request_time, document, deps);
                         events.push(AnalyzedEvent::NewScope(analyzed_root));
                     }
                     events
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
-                    self.analyze_expr(&paren_expr.expr, cache_config, document, deps)
+                    self.analyze_expr(&paren_expr.expr, request_time, document, deps)
                 }
                 PrimaryExpr::List(list_literal) => list_literal
                     .values
                     .iter()
-                    .flat_map(|expr| self.analyze_expr(expr, cache_config, document, deps))
+                    .flat_map(|expr| self.analyze_expr(expr, request_time, document, deps))
                     .collect(),
                 PrimaryExpr::Identifier(_)
                 | PrimaryExpr::Integer(_)
@@ -375,11 +369,11 @@ impl FullAnalyzer {
                 | PrimaryExpr::Error(_) => Vec::new(),
             },
             Expr::Unary(unary_expr) => {
-                self.analyze_expr(&unary_expr.expr, cache_config, document, deps)
+                self.analyze_expr(&unary_expr.expr, request_time, document, deps)
             }
             Expr::Binary(binary_expr) => {
-                let mut events = self.analyze_expr(&binary_expr.lhs, cache_config, document, deps);
-                events.extend(self.analyze_expr(&binary_expr.rhs, cache_config, document, deps));
+                let mut events = self.analyze_expr(&binary_expr.lhs, request_time, document, deps);
+                events.extend(self.analyze_expr(&binary_expr.rhs, request_time, document, deps));
                 events
             }
         }

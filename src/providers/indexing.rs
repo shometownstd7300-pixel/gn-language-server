@@ -32,7 +32,7 @@ pub async fn index(context: &RequestContext, workspace_root: &Path) {
 
     for path in find_gn_files(workspace_root) {
         let mut analyzer = context.analyzer.lock().unwrap();
-        analyzer.analyze_shallow(&path, context.cache_config).ok();
+        analyzer.analyze_shallow(&path, context.request_time).ok();
         count += 1;
     }
 

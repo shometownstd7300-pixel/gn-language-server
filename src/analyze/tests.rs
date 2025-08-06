@@ -14,12 +14,12 @@
 
 #![cfg(test)]
 
-use std::sync::{Arc, Mutex};
-
-use crate::{
-    analyze::Analyzer, ast::Statement, storage::DocumentStorage, testutils::testdata,
-    utils::CacheConfig,
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
 };
+
+use crate::{analyze::Analyzer, ast::Statement, storage::DocumentStorage, testutils::testdata};
 
 #[test]
 fn test_analyze_smoke() {
@@ -27,10 +27,7 @@ fn test_analyze_smoke() {
     let mut analyzer = Analyzer::new(&storage);
 
     let file = analyzer
-        .analyze(
-            &testdata("workspaces/smoke/BUILD.gn"),
-            CacheConfig::new(true),
-        )
+        .analyze(&testdata("workspaces/smoke/BUILD.gn"), Instant::now())
         .unwrap();
 
     // No parse error.
@@ -49,14 +46,14 @@ fn test_analyze_smoke() {
 
 #[test]
 fn test_analyze_cycles() {
-    let cache_config = CacheConfig::new(true);
+    let request_time = Instant::now();
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
     let mut analyzer = Analyzer::new(&storage);
 
     assert!(analyzer
-        .analyze(&testdata("workspaces/cycles/ok1.gni"), cache_config)
+        .analyze(&testdata("workspaces/cycles/ok1.gni"), request_time)
         .is_ok());
     assert!(analyzer
-        .analyze(&testdata("workspaces/cycles/bad1.gni"), cache_config)
+        .analyze(&testdata("workspaces/cycles/bad1.gni"), request_time)
         .is_ok());
 }

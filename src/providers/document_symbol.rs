@@ -34,7 +34,7 @@ pub async fn document_symbol(
         .analyzer
         .lock()
         .unwrap()
-        .analyze(&path, context.cache_config)?;
+        .analyze(&path, context.request_time)?;
 
     Ok(Some(DocumentSymbolResponse::Nested(
         current_file.symbols.clone(),

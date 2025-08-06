@@ -16,7 +16,7 @@ use std::{
     collections::{hash_map::Entry, BTreeSet, HashMap},
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Instant,
 };
 
@@ -24,10 +24,9 @@ use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
-    analyze::utils::{compute_next_verify, resolve_path},
+    analyze::utils::{resolve_path, CachedVerifier},
     ast::{parse, Block, Call, Comments, Statement},
-    storage::{Document, DocumentStorage, DocumentVersion},
-    utils::CacheConfig,
+    storage::{Document, DocumentVersion},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,13 +142,35 @@ pub struct ShallowAnalyzedFile {
     #[allow(unused)] // Backing analyzed_root
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
-    pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     pub links: Vec<AnalyzedLink<'static>>,
-    pub next_verify: RwLock<Instant>,
+    pub verifier: Arc<CachedVerifier>,
 }
 
 impl ShallowAnalyzedFile {
-    pub fn error(path: &Path) -> Pin<Arc<Self>> {
+    pub fn new(
+        document: Pin<Arc<Document>>,
+        ast_root: Pin<Box<Block<'static>>>,
+        analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
+        links: Vec<AnalyzedLink<'static>>,
+        deps: Vec<Arc<CachedVerifier>>,
+        request_time: Instant,
+    ) -> Pin<Arc<Self>> {
+        let verifier = Arc::new(CachedVerifier::new(
+            document.path.clone(),
+            document.version,
+            deps,
+            request_time,
+        ));
+        Arc::pin(Self {
+            document,
+            ast_root,
+            analyzed_root,
+            links,
+            verifier,
+        })
+    }
+
+    pub fn error(path: &Path, request_time: Instant) -> Pin<Arc<Self>> {
         let document = Arc::pin(Document::analysis_error(path));
         let ast_root = Box::pin(parse(&document.data));
         let analyzed_root = ShallowAnalyzedBlock::new_top_level();
@@ -159,44 +180,14 @@ impl ShallowAnalyzedFile {
         let analyzed_root = unsafe {
             std::mem::transmute::<ShallowAnalyzedBlock, ShallowAnalyzedBlock>(analyzed_root)
         };
-        let next_verify = RwLock::new(compute_next_verify(Instant::now(), document.version));
-        Arc::pin(ShallowAnalyzedFile {
+        Self::new(
             document,
             ast_root,
             analyzed_root,
-            deps: Vec::new(),
-            links: Vec::new(),
-            next_verify,
-        })
-    }
-
-    pub fn maybe_verify(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> bool {
-        if !cache_config.should_verify_shallow() {
-            return true;
-        }
-
-        if cache_config.time() <= *self.next_verify.read().unwrap() {
-            return true;
-        }
-
-        let mut next_verify = self.next_verify.write().unwrap();
-        if cache_config.time() <= *next_verify {
-            return true;
-        }
-
-        let version = storage.read_version(&self.document.path);
-        if version != self.document.version {
-            return false;
-        }
-
-        for dep in &self.deps {
-            if !dep.maybe_verify(cache_config, storage) {
-                return false;
-            }
-        }
-
-        *next_verify = compute_next_verify(cache_config.time(), version);
-        true
+            Vec::new(),
+            Vec::new(),
+            request_time,
+        )
     }
 }
 
@@ -250,36 +241,38 @@ pub struct AnalyzedFile {
     pub workspace_root: PathBuf,
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
-    pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub symbols: Vec<DocumentSymbol>,
-    pub next_verify: RwLock<Instant>,
+    pub verifier: Arc<CachedVerifier>,
 }
 
 impl AnalyzedFile {
-    pub fn maybe_verify(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> bool {
-        if cache_config.time() <= *self.next_verify.read().unwrap() {
-            return true;
-        }
+    pub fn new(
+        document: Pin<Arc<Document>>,
+        workspace_root: PathBuf,
+        ast_root: Pin<Box<Block<'static>>>,
+        analyzed_root: AnalyzedBlock<'static, 'static>,
+        links: Vec<AnalyzedLink<'static>>,
+        symbols: Vec<DocumentSymbol>,
+        deps: Vec<Arc<CachedVerifier>>,
+        request_time: Instant,
+    ) -> Pin<Arc<Self>> {
+        let verifier = Arc::new(CachedVerifier::new(
+            document.path.clone(),
+            document.version,
+            deps,
+            request_time,
+        ));
 
-        let mut next_verify = self.next_verify.write().unwrap();
-        if cache_config.time() <= *next_verify {
-            return true;
-        }
-
-        let version = storage.read_version(&self.document.path);
-        if version != self.document.version {
-            return false;
-        }
-
-        for dep in &self.deps {
-            if !dep.maybe_verify(cache_config, storage) {
-                return false;
-            }
-        }
-
-        *next_verify = compute_next_verify(cache_config.time(), version);
-        true
+        Arc::pin(Self {
+            document,
+            workspace_root,
+            ast_root,
+            analyzed_root,
+            links,
+            symbols,
+            verifier,
+        })
     }
 
     pub fn variables_at(&self, pos: usize) -> AnalyzedVariableEnv {

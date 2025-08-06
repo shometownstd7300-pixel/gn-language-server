@@ -15,7 +15,6 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
 };
 
 use pest::Span;
@@ -115,29 +114,6 @@ impl<'i> LineIndex<'i> {
         } else {
             None
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct CacheConfig {
-    time: Instant,
-    update_shallow: bool,
-}
-
-impl CacheConfig {
-    pub fn new(update_shallow: bool) -> Self {
-        Self {
-            time: Instant::now(),
-            update_shallow,
-        }
-    }
-
-    pub fn time(self) -> Instant {
-        self.time
-    }
-
-    pub fn should_verify_shallow(self) -> bool {
-        self.update_shallow
     }
 }
 

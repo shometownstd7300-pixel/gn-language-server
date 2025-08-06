@@ -16,6 +16,7 @@ use std::{
     collections::{btree_map::Entry, BTreeMap},
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use tokio::spawn;
@@ -37,17 +38,11 @@ use crate::{
     client::TestableClient,
     error::RpcResult,
     storage::DocumentStorage,
-    utils::{find_workspace_root, AsyncSignal, CacheConfig},
+    utils::{find_workspace_root, AsyncSignal},
 };
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum RequestType {
-    Interactive,
-    Background,
-}
-
 #[derive(Clone)]
-pub struct ServerContext {
+struct ServerContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Mutex<Analyzer>>,
     pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
@@ -67,14 +62,13 @@ impl ServerContext {
         }
     }
 
-    pub fn request(&self, request_type: RequestType) -> RequestContext {
-        let update_shallow = matches!(request_type, RequestType::Interactive);
+    pub fn request(&self) -> RequestContext {
         RequestContext {
             storage: self.storage.clone(),
             analyzer: self.analyzer.clone(),
             indexed: self.indexed.clone(),
             client: self.client.clone(),
-            cache_config: CacheConfig::new(update_shallow),
+            request_time: Instant::now(),
         }
     }
 }
@@ -85,13 +79,13 @@ pub struct RequestContext {
     pub analyzer: Arc<Mutex<Analyzer>>,
     pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
-    pub cache_config: CacheConfig,
+    pub request_time: Instant,
 }
 
 impl RequestContext {
     #[cfg(test)]
-    pub fn new_for_testing(request_type: RequestType) -> Self {
-        ServerContext::new_for_testing().request(request_type)
+    pub fn new_for_testing() -> Self {
+        ServerContext::new_for_testing().request()
     }
 }
 
@@ -152,7 +146,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let context = self.context.request(RequestType::Interactive);
+        let context = self.context.request();
         let configurations = self.context.client.configurations().await;
         if configurations.background_indexing {
             if let Ok(path) = params.text_document.uri.to_file_path() {
@@ -182,102 +176,69 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        crate::providers::document::did_change(
-            &self.context.request(RequestType::Background),
-            params,
-        )
-        .await;
+        crate::providers::document::did_change(&self.context.request(), params).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        crate::providers::document::did_close(
-            &self.context.request(RequestType::Interactive),
-            params,
-        )
-        .await;
+        crate::providers::document::did_close(&self.context.request(), params).await;
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
-        crate::providers::configuration::did_change_configuration(
-            &self.context.request(RequestType::Interactive),
-            params,
-        )
-        .await;
+        crate::providers::configuration::did_change_configuration(&self.context.request(), params)
+            .await;
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> RpcResult<Option<GotoDefinitionResponse>> {
-        Ok(crate::providers::goto_definition::goto_definition(
-            &self.context.request(RequestType::Interactive),
-            params,
+        Ok(
+            crate::providers::goto_definition::goto_definition(&self.context.request(), params)
+                .await?,
         )
-        .await?)
     }
 
     async fn hover(&self, params: HoverParams) -> RpcResult<Option<Hover>> {
-        Ok(
-            crate::providers::hover::hover(&self.context.request(RequestType::Background), params)
-                .await?,
-        )
+        Ok(crate::providers::hover::hover(&self.context.request(), params).await?)
     }
 
     async fn document_link(
         &self,
         params: DocumentLinkParams,
     ) -> RpcResult<Option<Vec<DocumentLink>>> {
-        Ok(crate::providers::document_link::document_link(
-            &self.context.request(RequestType::Background),
-            params,
-        )
-        .await?)
+        Ok(crate::providers::document_link::document_link(&self.context.request(), params).await?)
     }
 
     async fn document_link_resolve(&self, link: DocumentLink) -> RpcResult<DocumentLink> {
-        Ok(crate::providers::document_link::document_link_resolve(
-            &self.context.request(RequestType::Interactive),
-            link,
+        Ok(
+            crate::providers::document_link::document_link_resolve(&self.context.request(), link)
+                .await?,
         )
-        .await?)
     }
 
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> RpcResult<Option<DocumentSymbolResponse>> {
-        Ok(crate::providers::document_symbol::document_symbol(
-            &self.context.request(RequestType::Background),
-            params,
+        Ok(
+            crate::providers::document_symbol::document_symbol(&self.context.request(), params)
+                .await?,
         )
-        .await?)
     }
 
     async fn completion(&self, params: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
-        Ok(crate::providers::completion::completion(
-            &self.context.request(RequestType::Interactive),
-            params,
-        )
-        .await?)
+        Ok(crate::providers::completion::completion(&self.context.request(), params).await?)
     }
 
     async fn references(&self, params: ReferenceParams) -> RpcResult<Option<Vec<Location>>> {
-        Ok(crate::providers::references::references(
-            &self.context.request(RequestType::Interactive),
-            params,
-        )
-        .await?)
+        Ok(crate::providers::references::references(&self.context.request(), params).await?)
     }
 
     async fn formatting(
         &self,
         params: DocumentFormattingParams,
     ) -> RpcResult<Option<Vec<TextEdit>>> {
-        Ok(crate::providers::formatting::formatting(
-            &self.context.request(RequestType::Interactive),
-            params,
-        )
-        .await?)
+        Ok(crate::providers::formatting::formatting(&self.context.request(), params).await?)
     }
 }
 
