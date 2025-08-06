@@ -14,6 +14,7 @@
 
 use std::{path::Path, time::Instant};
 
+use futures::future::join_all;
 use tower_lsp::lsp_types::MessageType;
 
 use crate::{server::RequestContext, utils::find_gn_files};
@@ -28,15 +29,19 @@ pub async fn index(context: &RequestContext, workspace_root: &Path) {
         .await;
 
     let start_time = Instant::now();
+    let mut tasks = Vec::new();
     let mut count = 0;
 
     for path in find_gn_files(workspace_root) {
-        context
-            .analyzer
-            .analyze_shallow(&path, context.request_time)
-            .ok();
+        let analyzer = context.analyzer.clone();
+        let request_time = context.request_time;
+        tasks.push(tokio::spawn(async move {
+            analyzer.analyze_shallow(&path, request_time).ok();
+        }));
         count += 1;
     }
+
+    join_all(tasks).await;
 
     let elapsed = start_time.elapsed();
     context
