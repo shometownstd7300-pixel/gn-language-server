@@ -14,7 +14,6 @@
 
 use std::{
     collections::BTreeMap,
-    fmt::Write,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex, RwLock},
@@ -31,30 +30,17 @@ use crate::{
             WorkspaceContext,
         },
         links::collect_links,
-        utils::compute_next_check,
+        utils::compute_next_verify,
         AnalyzedLink,
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
-    error::{Error, Result},
     storage::{Document, DocumentStorage},
     utils::{parse_simple_literal, CacheConfig},
 };
 
 fn is_exported(name: &str) -> bool {
     !name.starts_with("_")
-}
-
-fn make_loop_error(cycle: &[PathBuf]) -> Error {
-    let mut message = String::new();
-    write!(&mut message, "Cycle detected: ").ok();
-    for (i, path) in cycle.iter().enumerate() {
-        if i > 0 {
-            write!(&mut message, " -> ").ok();
-        }
-        write!(&mut message, "{}", path.to_string_lossy()).ok();
-    }
-    Error::General(message)
 }
 
 pub struct ShallowAnalyzer {
@@ -80,7 +66,7 @@ impl ShallowAnalyzer {
         &mut self,
         path: &Path,
         cache_config: CacheConfig,
-    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
+    ) -> Pin<Arc<ShallowAnalyzedFile>> {
         self.analyze_cached(path, cache_config, &mut Vec::new())
     }
 
@@ -89,17 +75,16 @@ impl ShallowAnalyzer {
         path: &Path,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
-    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
+    ) -> Pin<Arc<ShallowAnalyzedFile>> {
         if let Some(cached_file) = self.cache.get(path) {
-            if cached_file.is_fresh(cache_config, &self.storage.lock().unwrap())? {
-                return Ok(cached_file.clone());
+            if cached_file.maybe_verify(cache_config, &self.storage.lock().unwrap()) {
+                return cached_file.clone();
             }
         }
 
-        let new_file = self.analyze_uncached(path, cache_config, visiting)?;
+        let new_file = self.analyze_uncached(path, cache_config, visiting);
         self.cache.insert(path.to_path_buf(), new_file.clone());
-
-        Ok(new_file)
+        new_file
     }
 
     fn analyze_uncached(
@@ -107,9 +92,9 @@ impl ShallowAnalyzer {
         path: &Path,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
-    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
+    ) -> Pin<Arc<ShallowAnalyzedFile>> {
         if visiting.iter().any(|p| p == path) {
-            return Err(make_loop_error(visiting));
+            return ShallowAnalyzedFile::error(path);
         }
 
         visiting.push(path.to_path_buf());
@@ -123,19 +108,12 @@ impl ShallowAnalyzer {
         path: &Path,
         cache_config: CacheConfig,
         visiting: &mut Vec<PathBuf>,
-    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
-        let document = match self.storage.lock().unwrap().read(path) {
-            Ok(document) => document,
-            Err(err) if err.is_not_found() => {
-                // Ignore missing imports as they might be imported conditionally.
-                return Ok(ShallowAnalyzedFile::empty(path));
-            }
-            Err(err) => return Err(err),
-        };
+    ) -> Pin<Arc<ShallowAnalyzedFile>> {
+        let document = self.storage.lock().unwrap().read(path);
         let ast_root = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
         let analyzed_root =
-            self.analyze_block(&ast_root, cache_config, &document, &mut deps, visiting)?;
+            self.analyze_block(&ast_root, cache_config, &document, &mut deps, visiting);
 
         let links = collect_links(&ast_root, path, &self.context);
 
@@ -147,16 +125,16 @@ impl ShallowAnalyzer {
         };
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
-        let next_check = RwLock::new(compute_next_check(Instant::now(), document.version));
+        let next_verify = RwLock::new(compute_next_verify(Instant::now(), document.version));
 
-        Ok(Arc::pin(ShallowAnalyzedFile {
+        Arc::pin(ShallowAnalyzedFile {
             document,
             ast_root,
             analyzed_root,
             deps,
             links,
-            next_check,
-        }))
+            next_verify,
+        })
     }
 
     fn analyze_block<'i, 'p>(
@@ -166,7 +144,7 @@ impl ShallowAnalyzer {
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
         visiting: &mut Vec<PathBuf>,
-    ) -> Result<ShallowAnalyzedBlock<'i, 'p>> {
+    ) -> ShallowAnalyzedBlock<'i, 'p> {
         let mut analyzed_block = MutableShallowAnalyzedBlock::new_top_level();
 
         for statement in &block.statements {
@@ -206,7 +184,7 @@ impl ShallowAnalyzer {
                             let path = self
                                 .context
                                 .resolve_path(name, document.path.parent().unwrap());
-                            let file = self.analyze_cached(&path, cache_config, visiting)?;
+                            let file = self.analyze_cached(&path, cache_config, visiting);
                             analyzed_block.import(&file.analyzed_root);
                             deps.push(file);
                         }
@@ -239,7 +217,7 @@ impl ShallowAnalyzer {
                                 document,
                                 deps,
                                 visiting,
-                            )?);
+                            ));
                         }
                     }
                     SET_DEFAULTS => {}
@@ -307,7 +285,7 @@ impl ShallowAnalyzer {
                             document,
                             deps,
                             visiting,
-                        )?);
+                        ));
                         match &current_condition.else_block {
                             None => break,
                             Some(Either::Left(next_condition)) => {
@@ -320,7 +298,7 @@ impl ShallowAnalyzer {
                                     document,
                                     deps,
                                     visiting,
-                                )?);
+                                ));
                                 break;
                             }
                         }
@@ -330,6 +308,6 @@ impl ShallowAnalyzer {
             }
         }
 
-        Ok(analyzed_block.finalize())
+        analyzed_block.finalize()
     }
 }

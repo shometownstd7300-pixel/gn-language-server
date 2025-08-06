@@ -58,5 +58,5 @@ fn test_analyze_cycles() {
         .is_ok());
     assert!(analyzer
         .analyze(&testdata("workspaces/cycles/bad1.gni"), cache_config)
-        .is_err());
+        .is_ok());
 }

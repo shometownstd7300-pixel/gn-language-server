@@ -27,12 +27,14 @@ pub fn resolve_path(name: &str, root_dir: &Path, current_dir: &Path) -> PathBuf 
     }
 }
 
-const CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const VERIFY_INTERVAL: Duration = Duration::from_secs(5);
 
-pub fn compute_next_check(t: Instant, version: DocumentVersion) -> Instant {
+pub fn compute_next_verify(t: Instant, version: DocumentVersion) -> Instant {
     match version {
-        DocumentVersion::OnDisk { .. } => t + CHECK_INTERVAL,
-        // Do not skip version checks for in-memory documents.
-        _ => t,
+        DocumentVersion::OnDisk { .. }
+        | DocumentVersion::IoError
+        | DocumentVersion::AnalysisError => t + VERIFY_INTERVAL,
+        // Do not skip verification for in-memory documents.
+        DocumentVersion::InMemory { .. } => t,
     }
 }

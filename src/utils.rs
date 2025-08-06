@@ -136,7 +136,7 @@ impl CacheConfig {
         self.time
     }
 
-    pub fn should_update_shallow(self) -> bool {
+    pub fn should_verify_shallow(self) -> bool {
         self.update_shallow
     }
 }

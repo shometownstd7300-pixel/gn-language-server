@@ -61,7 +61,7 @@ impl Analyzer {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
-        self.workspace_for(path)?.analyze(path, cache_config)
+        Ok(self.workspace_for(path)?.analyze(path, cache_config))
     }
 
     pub fn analyze_shallow(
@@ -72,8 +72,9 @@ impl Analyzer {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
-        self.workspace_for(path)?
-            .analyze_shallow(path, cache_config)
+        Ok(self
+            .workspace_for(path)?
+            .analyze_shallow(path, cache_config))
     }
 
     pub fn cached_files(&self, workspace_root: &Path) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
@@ -88,7 +89,7 @@ impl Analyzer {
         let dot_gn_path = workspace_root.join(".gn");
         let dot_gn_version = {
             let storage = self.storage.lock().unwrap();
-            storage.read_version(&dot_gn_path)?
+            storage.read_version(&dot_gn_path)
         };
 
         let cache_hit = self
@@ -101,7 +102,7 @@ impl Analyzer {
 
         let build_config = {
             let storage = self.storage.lock().unwrap();
-            let document = storage.read(&dot_gn_path)?;
+            let document = storage.read(&dot_gn_path);
             evaluate_dot_gn(workspace_root, &document.data)?
         };
 
@@ -132,11 +133,7 @@ impl WorkspaceAnalyzer {
         }
     }
 
-    pub fn analyze(
-        &mut self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Pin<Arc<AnalyzedFile>>> {
+    pub fn analyze(&mut self, path: &Path, cache_config: CacheConfig) -> Pin<Arc<AnalyzedFile>> {
         self.analyzer.analyze(path, cache_config)
     }
 
@@ -144,7 +141,7 @@ impl WorkspaceAnalyzer {
         &mut self,
         path: &Path,
         cache_config: CacheConfig,
-    ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
+    ) -> Pin<Arc<ShallowAnalyzedFile>> {
         self.analyzer.get_shallow_mut().analyze(path, cache_config)
     }
 }

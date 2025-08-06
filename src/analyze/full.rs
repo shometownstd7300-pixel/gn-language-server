@@ -26,13 +26,12 @@ use pest::Span;
 use crate::{
     analyze::{
         links::collect_links, shallow::ShallowAnalyzer, symbols::collect_symbols,
-        utils::compute_next_check, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
+        utils::compute_next_verify, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
         AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedFile,
         WorkspaceContext,
     },
     ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
     builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
-    error::{Error, Result},
     storage::{Document, DocumentStorage},
     utils::{parse_simple_literal, CacheConfig},
 };
@@ -62,51 +61,39 @@ impl FullAnalyzer {
         &mut self.shallow_analyzer
     }
 
-    pub fn analyze(
-        &mut self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Pin<Arc<AnalyzedFile>>> {
-        if !path.is_absolute() {
-            return Err(Error::General("Path must be absolute".to_string()));
-        }
+    pub fn analyze(&mut self, path: &Path, cache_config: CacheConfig) -> Pin<Arc<AnalyzedFile>> {
         self.analyze_cached(path, cache_config)
     }
 
-    fn analyze_cached(
-        &mut self,
-        path: &Path,
-        cache_config: CacheConfig,
-    ) -> Result<Pin<Arc<AnalyzedFile>>> {
+    fn analyze_cached(&mut self, path: &Path, cache_config: CacheConfig) -> Pin<Arc<AnalyzedFile>> {
         if self.cache.contains_key(path) {
             let cached_file = self.cache.get(path).unwrap();
             let storage = self.storage.lock().unwrap();
-            if cached_file.is_fresh(cache_config, &storage)? {
-                return Ok(cached_file.clone());
+            if cached_file.maybe_verify(cache_config, &storage) {
+                return cached_file.clone();
             }
         }
 
-        let new_file = self.analyze_uncached(path, cache_config)?;
+        let new_file = self.analyze_uncached(path, cache_config);
         self.cache.insert(path.to_path_buf(), new_file.clone());
-        Ok(new_file)
+        new_file
     }
 
     fn analyze_uncached(
         &mut self,
         path: &Path,
         cache_config: CacheConfig,
-    ) -> Result<Pin<Arc<AnalyzedFile>>> {
-        let document = self.storage.lock().unwrap().read(path)?;
+    ) -> Pin<Arc<AnalyzedFile>> {
+        let document = self.storage.lock().unwrap().read(path);
         let ast_root = Box::pin(parse(&document.data));
 
         let mut deps = Vec::new();
-        let mut analyzed_root =
-            self.analyze_block(&ast_root, cache_config, &document, &mut deps)?;
+        let mut analyzed_root = self.analyze_block(&ast_root, cache_config, &document, &mut deps);
 
         // Insert a synthetic import of BUILDCONFIG.gn.
         let dot_gn_file = self
             .shallow_analyzer
-            .analyze(&self.context.build_config, cache_config)?;
+            .analyze(&self.context.build_config, cache_config);
         analyzed_root.events.insert(
             0,
             AnalyzedEvent::Import(AnalyzedImport {
@@ -126,9 +113,9 @@ impl FullAnalyzer {
             unsafe { std::mem::transmute::<AnalyzedBlock, AnalyzedBlock>(analyzed_root) };
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
-        let next_check = RwLock::new(compute_next_check(Instant::now(), document.version));
+        let next_verify = RwLock::new(compute_next_verify(Instant::now(), document.version));
 
-        Ok(Arc::pin(AnalyzedFile {
+        Arc::pin(AnalyzedFile {
             document,
             workspace_root: self.context.root.clone(),
             ast_root,
@@ -136,8 +123,8 @@ impl FullAnalyzer {
             deps,
             links,
             symbols,
-            next_check,
-        }))
+            next_verify,
+        })
     }
 
     fn analyze_block<'i, 'p>(
@@ -146,11 +133,11 @@ impl FullAnalyzer {
         cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
-    ) -> Result<AnalyzedBlock<'i, 'p>> {
+    ) -> AnalyzedBlock<'i, 'p> {
         let events: Vec<AnalyzedEvent> = block
             .statements
             .iter()
-            .map(|statement| -> Result<Vec<AnalyzedEvent>> {
+            .flat_map(|statement| -> Vec<AnalyzedEvent> {
                 match statement {
                     Statement::Assignment(assignment) => {
                         let mut events = Vec::new();
@@ -171,145 +158,135 @@ impl FullAnalyzer {
                             cache_config,
                             document,
                             deps,
-                        )?);
-                        Ok(events)
+                        ));
+                        events
                     }
-                    Statement::Call(call) => {
-                        match call.function.name {
-                            IMPORT => {
-                                if let Some(name) = call
-                                    .only_arg()
-                                    .and_then(|expr| expr.as_primary_string())
-                                    .and_then(|s| parse_simple_literal(s.raw_value))
-                                {
-                                    let path = self
-                                        .context
-                                        .resolve_path(name, document.path.parent().unwrap());
-                                    let file =
-                                        match self.shallow_analyzer.analyze(&path, cache_config) {
-                                            Err(err) if err.is_not_found() => {
-                                                // Ignore missing imports as they might be imported conditionally.
-                                                ShallowAnalyzedFile::empty(&path)
-                                            }
-                                            other => other?,
-                                        };
-                                    deps.push(file.clone());
-                                    Ok(vec![AnalyzedEvent::Import(AnalyzedImport {
-                                        file,
-                                        span: call.span(),
-                                    })])
-                                } else {
-                                    Ok(Vec::new())
-                                }
-                            }
-                            TEMPLATE => {
-                                let mut events = Vec::new();
-                                if let Some(name) = call
-                                    .only_arg()
-                                    .and_then(|expr| expr.as_primary_string())
-                                    .and_then(|s| parse_simple_literal(s.raw_value))
-                                {
-                                    events.push(AnalyzedEvent::Template(AnalyzedTemplate {
-                                        name,
-                                        comments: call.comments.clone(),
-                                        document,
-                                        header: call.function.span,
-                                        span: call.span,
-                                    }));
-                                }
-                                if let Some(block) = &call.block {
-                                    events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                        block,
-                                        cache_config,
-                                        document,
-                                        deps,
-                                    )?));
-                                }
-                                Ok(events)
-                            }
-                            DECLARE_ARGS => {
-                                if let Some(block) = &call.block {
-                                    let analyzed_root =
-                                        self.analyze_block(block, cache_config, document, deps)?;
-                                    Ok(vec![AnalyzedEvent::DeclareArgs(analyzed_root)])
-                                } else {
-                                    Ok(Vec::new())
-                                }
-                            }
-                            FOREACH => {
-                                if let Some(block) = &call.block {
-                                    Ok(self
-                                        .analyze_block(block, cache_config, document, deps)?
-                                        .events)
-                                } else {
-                                    Ok(Vec::new())
-                                }
-                            }
-                            SET_DEFAULTS => {
-                                if let Some(block) = &call.block {
-                                    let analyzed_root =
-                                        self.analyze_block(block, cache_config, document, deps)?;
-                                    Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
-                                } else {
-                                    Ok(Vec::new())
-                                }
-                            }
-                            FORWARD_VARIABLES_FROM => {
-                                if let Some(strings) = call
-                                    .args
-                                    .get(1)
-                                    .and_then(|expr| expr.as_primary_list())
-                                    .map(|list| {
-                                        list.values
-                                            .iter()
-                                            .filter_map(|expr| expr.as_primary_string())
-                                            .collect::<Vec<_>>()
-                                    })
-                                {
-                                    return Ok(strings
-                                        .into_iter()
-                                        .filter_map(|string| {
-                                            parse_simple_literal(string.raw_value).map(|name| {
-                                                AnalyzedEvent::Assignment(AnalyzedAssignment {
-                                                    name,
-                                                    comments: Comments::default(),
-                                                    statement,
-                                                    document,
-                                                    variable_span: string.span,
-                                                })
-                                            })
-                                        })
-                                        .collect());
-                                }
-                                Ok(Vec::new())
-                            }
-                            _ => {
-                                let mut events = Vec::new();
-                                if let Some(name) = call
-                                    .only_arg()
-                                    .and_then(|expr| expr.as_primary_string())
-                                    .and_then(|s| parse_simple_literal(s.raw_value))
-                                {
-                                    events.push(AnalyzedEvent::Target(AnalyzedTarget {
-                                        name,
-                                        call,
-                                        document,
-                                        header: call.args[0].span(),
-                                        span: call.span,
-                                    }));
-                                }
-                                if let Some(block) = &call.block {
-                                    events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                        block,
-                                        cache_config,
-                                        document,
-                                        deps,
-                                    )?));
-                                }
-                                Ok(events)
+                    Statement::Call(call) => match call.function.name {
+                        IMPORT => {
+                            if let Some(name) = call
+                                .only_arg()
+                                .and_then(|expr| expr.as_primary_string())
+                                .and_then(|s| parse_simple_literal(s.raw_value))
+                            {
+                                let path = self
+                                    .context
+                                    .resolve_path(name, document.path.parent().unwrap());
+                                let file = self.shallow_analyzer.analyze(&path, cache_config);
+                                deps.push(file.clone());
+                                vec![AnalyzedEvent::Import(AnalyzedImport {
+                                    file,
+                                    span: call.span(),
+                                })]
+                            } else {
+                                Vec::new()
                             }
                         }
-                    }
+                        TEMPLATE => {
+                            let mut events = Vec::new();
+                            if let Some(name) = call
+                                .only_arg()
+                                .and_then(|expr| expr.as_primary_string())
+                                .and_then(|s| parse_simple_literal(s.raw_value))
+                            {
+                                events.push(AnalyzedEvent::Template(AnalyzedTemplate {
+                                    name,
+                                    comments: call.comments.clone(),
+                                    document,
+                                    header: call.function.span,
+                                    span: call.span,
+                                }));
+                            }
+                            if let Some(block) = &call.block {
+                                events.push(AnalyzedEvent::NewScope(self.analyze_block(
+                                    block,
+                                    cache_config,
+                                    document,
+                                    deps,
+                                )));
+                            }
+                            events
+                        }
+                        DECLARE_ARGS => {
+                            if let Some(block) = &call.block {
+                                let analyzed_root =
+                                    self.analyze_block(block, cache_config, document, deps);
+                                vec![AnalyzedEvent::DeclareArgs(analyzed_root)]
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        FOREACH => {
+                            if let Some(block) = &call.block {
+                                self.analyze_block(block, cache_config, document, deps)
+                                    .events
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        SET_DEFAULTS => {
+                            if let Some(block) = &call.block {
+                                let analyzed_root =
+                                    self.analyze_block(block, cache_config, document, deps);
+                                vec![AnalyzedEvent::NewScope(analyzed_root)]
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        FORWARD_VARIABLES_FROM => {
+                            if let Some(strings) = call
+                                .args
+                                .get(1)
+                                .and_then(|expr| expr.as_primary_list())
+                                .map(|list| {
+                                    list.values
+                                        .iter()
+                                        .filter_map(|expr| expr.as_primary_string())
+                                        .collect::<Vec<_>>()
+                                })
+                            {
+                                return strings
+                                    .into_iter()
+                                    .filter_map(|string| {
+                                        parse_simple_literal(string.raw_value).map(|name| {
+                                            AnalyzedEvent::Assignment(AnalyzedAssignment {
+                                                name,
+                                                comments: Comments::default(),
+                                                statement,
+                                                document,
+                                                variable_span: string.span,
+                                            })
+                                        })
+                                    })
+                                    .collect();
+                            }
+                            Vec::new()
+                        }
+                        _ => {
+                            let mut events = Vec::new();
+                            if let Some(name) = call
+                                .only_arg()
+                                .and_then(|expr| expr.as_primary_string())
+                                .and_then(|s| parse_simple_literal(s.raw_value))
+                            {
+                                events.push(AnalyzedEvent::Target(AnalyzedTarget {
+                                    name,
+                                    call,
+                                    document,
+                                    header: call.args[0].span(),
+                                    span: call.span,
+                                }));
+                            }
+                            if let Some(block) = &call.block {
+                                events.push(AnalyzedEvent::NewScope(self.analyze_block(
+                                    block,
+                                    cache_config,
+                                    document,
+                                    deps,
+                                )));
+                            }
+                            events
+                        }
+                    },
                     Statement::Condition(condition) => {
                         let mut events = Vec::new();
                         let mut condition_blocks = Vec::new();
@@ -320,13 +297,13 @@ impl FullAnalyzer {
                                 cache_config,
                                 document,
                                 deps,
-                            )?);
+                            ));
                             condition_blocks.push(self.analyze_block(
                                 &current_condition.then_block,
                                 cache_config,
                                 document,
                                 deps,
-                            )?);
+                            ));
                             match &current_condition.else_block {
                                 None => break,
                                 Some(Either::Left(next_condition)) => {
@@ -338,26 +315,23 @@ impl FullAnalyzer {
                                         cache_config,
                                         document,
                                         deps,
-                                    )?);
+                                    ));
                                     break;
                                 }
                             }
                         }
                         events.push(AnalyzedEvent::Conditions(condition_blocks));
-                        Ok(events)
+                        events
                     }
-                    Statement::Error(_) => Ok(Vec::new()),
+                    Statement::Error(_) => Vec::new(),
                 }
             })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
             .collect();
 
-        Ok(AnalyzedBlock {
+        AnalyzedBlock {
             events,
             span: block.span,
-        })
+        }
     }
 
     fn analyze_expr<'i, 'p>(
@@ -366,55 +340,47 @@ impl FullAnalyzer {
         cache_config: CacheConfig,
         document: &'i Document,
         deps: &mut Vec<Pin<Arc<ShallowAnalyzedFile>>>,
-    ) -> Result<Vec<AnalyzedEvent<'i, 'p>>> {
+    ) -> Vec<AnalyzedEvent<'i, 'p>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
-                    let analyzed_root = self.analyze_block(block, cache_config, document, deps)?;
-                    Ok(vec![AnalyzedEvent::NewScope(analyzed_root)])
+                    let analyzed_root = self.analyze_block(block, cache_config, document, deps);
+                    vec![AnalyzedEvent::NewScope(analyzed_root)]
                 }
                 PrimaryExpr::Call(call) => {
                     let mut events: Vec<AnalyzedEvent> = call
                         .args
                         .iter()
-                        .map(|expr| self.analyze_expr(expr, cache_config, document, deps))
-                        .collect::<Result<Vec<_>>>()?
-                        .into_iter()
-                        .flatten()
+                        .flat_map(|expr| self.analyze_expr(expr, cache_config, document, deps))
                         .collect();
                     if let Some(block) = &call.block {
-                        let analyzed_root =
-                            self.analyze_block(block, cache_config, document, deps)?;
+                        let analyzed_root = self.analyze_block(block, cache_config, document, deps);
                         events.push(AnalyzedEvent::NewScope(analyzed_root));
                     }
-                    Ok(events)
+                    events
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
                     self.analyze_expr(&paren_expr.expr, cache_config, document, deps)
                 }
-                PrimaryExpr::List(list_literal) => Ok(list_literal
+                PrimaryExpr::List(list_literal) => list_literal
                     .values
                     .iter()
-                    .map(|expr| self.analyze_expr(expr, cache_config, document, deps))
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .flatten()
-                    .collect()),
+                    .flat_map(|expr| self.analyze_expr(expr, cache_config, document, deps))
+                    .collect(),
                 PrimaryExpr::Identifier(_)
                 | PrimaryExpr::Integer(_)
                 | PrimaryExpr::String(_)
                 | PrimaryExpr::ArrayAccess(_)
                 | PrimaryExpr::ScopeAccess(_)
-                | PrimaryExpr::Error(_) => Ok(Vec::new()),
+                | PrimaryExpr::Error(_) => Vec::new(),
             },
             Expr::Unary(unary_expr) => {
                 self.analyze_expr(&unary_expr.expr, cache_config, document, deps)
             }
             Expr::Binary(binary_expr) => {
-                let mut events =
-                    self.analyze_expr(&binary_expr.lhs, cache_config, document, deps)?;
-                events.extend(self.analyze_expr(&binary_expr.rhs, cache_config, document, deps)?);
-                Ok(events)
+                let mut events = self.analyze_expr(&binary_expr.lhs, cache_config, document, deps);
+                events.extend(self.analyze_expr(&binary_expr.rhs, cache_config, document, deps));
+                events
             }
         }
     }

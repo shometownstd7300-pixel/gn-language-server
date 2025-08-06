@@ -14,7 +14,6 @@ exclude = [
 
 [dependencies]
 either = "1.13.0"
-fs-err = "3.0.0"
 futures = "0.3.31"
 itertools = "0.14.0"
 pest = "2.7.15"

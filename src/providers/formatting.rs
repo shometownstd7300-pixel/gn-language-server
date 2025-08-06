@@ -57,7 +57,7 @@ pub async fn formatting(
         ));
     };
 
-    let document = context.storage.lock().unwrap().read(&file_path)?;
+    let document = context.storage.lock().unwrap().read(&file_path);
 
     let mut process = Command::new(gn_path)
         .args(["format", "--stdin"])

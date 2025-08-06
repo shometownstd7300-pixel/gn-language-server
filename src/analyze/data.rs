@@ -24,9 +24,8 @@ use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
-    analyze::utils::{compute_next_check, resolve_path},
+    analyze::utils::{compute_next_verify, resolve_path},
     ast::{parse, Block, Call, Comments, Statement},
-    error::Result,
     storage::{Document, DocumentStorage, DocumentVersion},
     utils::CacheConfig,
 };
@@ -146,12 +145,12 @@ pub struct ShallowAnalyzedFile {
     pub analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
     pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     pub links: Vec<AnalyzedLink<'static>>,
-    pub next_check: RwLock<Instant>,
+    pub next_verify: RwLock<Instant>,
 }
 
 impl ShallowAnalyzedFile {
-    pub fn empty(path: &Path) -> Pin<Arc<Self>> {
-        let document = Arc::pin(Document::empty(path));
+    pub fn error(path: &Path) -> Pin<Arc<Self>> {
+        let document = Arc::pin(Document::analysis_error(path));
         let ast_root = Box::pin(parse(&document.data));
         let analyzed_root = ShallowAnalyzedBlock::new_top_level();
         // SAFETY: ast_root's contents are backed by pinned document.
@@ -160,44 +159,44 @@ impl ShallowAnalyzedFile {
         let analyzed_root = unsafe {
             std::mem::transmute::<ShallowAnalyzedBlock, ShallowAnalyzedBlock>(analyzed_root)
         };
-        let next_check = RwLock::new(compute_next_check(Instant::now(), document.version));
+        let next_verify = RwLock::new(compute_next_verify(Instant::now(), document.version));
         Arc::pin(ShallowAnalyzedFile {
             document,
             ast_root,
             analyzed_root,
             deps: Vec::new(),
             links: Vec::new(),
-            next_check,
+            next_verify,
         })
     }
 
-    pub fn is_fresh(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> Result<bool> {
-        if !cache_config.should_update_shallow() {
-            return Ok(true);
+    pub fn maybe_verify(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> bool {
+        if !cache_config.should_verify_shallow() {
+            return true;
         }
 
-        if cache_config.time() <= *self.next_check.read().unwrap() {
-            return Ok(true);
+        if cache_config.time() <= *self.next_verify.read().unwrap() {
+            return true;
         }
 
-        let mut next_check = self.next_check.write().unwrap();
-        if cache_config.time() <= *next_check {
-            return Ok(true);
+        let mut next_verify = self.next_verify.write().unwrap();
+        if cache_config.time() <= *next_verify {
+            return true;
         }
 
-        let version = storage.read_version(&self.document.path)?;
+        let version = storage.read_version(&self.document.path);
         if version != self.document.version {
-            return Ok(false);
+            return false;
         }
 
         for dep in &self.deps {
-            if !dep.is_fresh(cache_config, storage)? {
-                return Ok(false);
+            if !dep.maybe_verify(cache_config, storage) {
+                return false;
             }
         }
 
-        *next_check = compute_next_check(cache_config.time(), version);
-        Ok(true)
+        *next_verify = compute_next_verify(cache_config.time(), version);
+        true
     }
 }
 
@@ -254,33 +253,33 @@ pub struct AnalyzedFile {
     pub deps: Vec<Pin<Arc<ShallowAnalyzedFile>>>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub symbols: Vec<DocumentSymbol>,
-    pub next_check: RwLock<Instant>,
+    pub next_verify: RwLock<Instant>,
 }
 
 impl AnalyzedFile {
-    pub fn is_fresh(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> Result<bool> {
-        if cache_config.time() <= *self.next_check.read().unwrap() {
-            return Ok(true);
+    pub fn maybe_verify(&self, cache_config: CacheConfig, storage: &DocumentStorage) -> bool {
+        if cache_config.time() <= *self.next_verify.read().unwrap() {
+            return true;
         }
 
-        let mut next_check = self.next_check.write().unwrap();
-        if cache_config.time() <= *next_check {
-            return Ok(true);
+        let mut next_verify = self.next_verify.write().unwrap();
+        if cache_config.time() <= *next_verify {
+            return true;
         }
 
-        let version = storage.read_version(&self.document.path)?;
+        let version = storage.read_version(&self.document.path);
         if version != self.document.version {
-            return Ok(false);
+            return false;
         }
 
         for dep in &self.deps {
-            if !dep.is_fresh(cache_config, storage)? {
-                return Ok(false);
+            if !dep.maybe_verify(cache_config, storage) {
+                return false;
             }
         }
 
-        *next_check = compute_next_check(cache_config.time(), version);
-        Ok(true)
+        *next_verify = compute_next_verify(cache_config.time(), version);
+        true
     }
 
     pub fn variables_at(&self, pos: usize) -> AnalyzedVariableEnv {

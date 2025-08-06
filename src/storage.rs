@@ -14,20 +14,20 @@
 
 use std::{
     collections::BTreeMap,
-    io::ErrorKind,
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
     time::SystemTime,
 };
 
-use crate::{error::Result, utils::LineIndex};
+use crate::utils::LineIndex;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DocumentVersion {
     OnDisk { modified: SystemTime },
     InMemory { revision: i32 },
-    Missing,
+    AnalysisError,
+    IoError,
 }
 
 pub struct Document {
@@ -51,8 +51,8 @@ impl Document {
         }
     }
 
-    pub fn empty(path: &Path) -> Self {
-        Self::new(path, String::new(), DocumentVersion::Missing)
+    pub fn analysis_error(path: &Path) -> Self {
+        Self::new(path, String::new(), DocumentVersion::AnalysisError)
     }
 }
 
@@ -83,27 +83,26 @@ impl DocumentStorage {
         Default::default()
     }
 
-    pub fn read_version(&self, path: &Path) -> Result<DocumentVersion> {
+    pub fn read_version(&self, path: &Path) -> DocumentVersion {
         if let Some(doc) = self.memory_docs.get(path) {
-            return Ok(doc.version);
+            return doc.version;
         }
 
-        let metadata = match fs_err::metadata(path) {
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(DocumentVersion::Missing),
-            other => other?,
+        let modified = match std::fs::metadata(path).and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(_) => return DocumentVersion::IoError,
         };
-        let modified = metadata.modified()?;
-        Ok(DocumentVersion::OnDisk { modified })
+        DocumentVersion::OnDisk { modified }
     }
 
-    pub fn read(&self, path: &Path) -> Result<Pin<Arc<Document>>> {
+    pub fn read(&self, path: &Path) -> Pin<Arc<Document>> {
         if let Some(doc) = self.memory_docs.get(path) {
-            return Ok(doc.clone());
+            return doc.clone();
         }
         // Read the version first to be pesimistic about file changes.
-        let version = self.read_version(path)?;
-        let data = fs_err::read_to_string(path)?;
-        Ok(Arc::pin(Document::new(path, data, version)))
+        let version = self.read_version(path);
+        let data = std::fs::read_to_string(path).unwrap_or_default();
+        Arc::pin(Document::new(path, data, version))
     }
 
     pub fn load_to_memory(&mut self, path: &Path, data: &str, revision: i32) {
