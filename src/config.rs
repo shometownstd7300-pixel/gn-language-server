@@ -42,4 +42,6 @@ impl Default for Configurations {
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExperimentalConfigurations {}
+pub struct ExperimentalConfigurations {
+    pub parallel_indexing: bool,
+}

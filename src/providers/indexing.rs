@@ -14,12 +14,12 @@
 
 use std::{path::Path, time::Instant};
 
-use futures::future::join_all;
+use futures::{future::join_all, FutureExt};
 use tower_lsp::lsp_types::MessageType;
 
 use crate::{server::RequestContext, utils::find_gn_files};
 
-pub async fn index(context: &RequestContext, workspace_root: &Path) {
+pub async fn index(context: &RequestContext, workspace_root: &Path, parallel: bool) {
     context
         .client
         .log_message(
@@ -35,9 +35,18 @@ pub async fn index(context: &RequestContext, workspace_root: &Path) {
     for path in find_gn_files(workspace_root) {
         let analyzer = context.analyzer.clone();
         let request_time = context.request_time;
-        tasks.push(tokio::spawn(async move {
+        let task = async move {
             analyzer.analyze_shallow(&path, request_time).ok();
-        }));
+        };
+        let task = if parallel {
+            async move {
+                tokio::spawn(task);
+            }
+            .boxed()
+        } else {
+            task.boxed()
+        };
+        tasks.push(task);
         count += 1;
     }
 

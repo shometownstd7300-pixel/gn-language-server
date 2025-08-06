@@ -165,7 +165,12 @@ impl LanguageServer for Backend {
                     if let Some(mut indexed) = maybe_indexed {
                         let context = context.clone();
                         spawn(async move {
-                            crate::providers::indexing::index(&context, &workspace_root).await;
+                            crate::providers::indexing::index(
+                                &context,
+                                &workspace_root,
+                                configurations.experimental.parallel_indexing,
+                            )
+                            .await;
                             indexed.set();
                         });
                     }
