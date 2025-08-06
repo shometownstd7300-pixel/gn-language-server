@@ -33,7 +33,7 @@ mod utils;
 #[tokio::main]
 async fn main() {
     if let Ok(path) = std::env::var("GN_BENCH") {
-        run_bench(Path::new(&path));
+        run_bench(Path::new(&path)).await;
         return;
     }
     server::run().await;

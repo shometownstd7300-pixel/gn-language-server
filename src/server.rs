@@ -44,7 +44,7 @@ use crate::{
 #[derive(Clone)]
 struct ServerContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
-    pub analyzer: Arc<Mutex<Analyzer>>,
+    pub analyzer: Arc<Analyzer>,
     pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
 }
@@ -53,7 +53,7 @@ impl ServerContext {
     #[cfg(test)]
     pub fn new_for_testing() -> Self {
         let storage = Arc::new(Mutex::new(DocumentStorage::new()));
-        let analyzer = Arc::new(Mutex::new(Analyzer::new(&storage)));
+        let analyzer = Arc::new(Analyzer::new(&storage));
         Self {
             storage,
             analyzer,
@@ -76,7 +76,7 @@ impl ServerContext {
 #[derive(Clone)]
 pub struct RequestContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
-    pub analyzer: Arc<Mutex<Analyzer>>,
+    pub analyzer: Arc<Analyzer>,
     pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
     pub request_time: Instant,
@@ -96,7 +96,7 @@ struct Backend {
 impl Backend {
     pub fn new(
         storage: &Arc<Mutex<DocumentStorage>>,
-        analyzer: &Arc<Mutex<Analyzer>>,
+        analyzer: &Arc<Analyzer>,
         client: TestableClient,
     ) -> Self {
         Self {
@@ -244,7 +244,7 @@ impl LanguageServer for Backend {
 
 pub async fn run() {
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
-    let analyzer = Arc::new(Mutex::new(Analyzer::new(&storage)));
+    let analyzer = Arc::new(Analyzer::new(&storage));
     let (service, socket) = LspService::new(move |client| {
         Backend::new(&storage, &analyzer, TestableClient::new(client))
     });

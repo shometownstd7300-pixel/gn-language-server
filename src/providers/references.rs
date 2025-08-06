@@ -49,11 +49,7 @@ async fn target_references(
     };
     indexed.wait().await;
 
-    let cached_files = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .cached_files(workspace_root);
+    let cached_files = context.analyzer.cached_files(workspace_root);
 
     let mut references: Vec<Location> = Vec::new();
     for file in cached_files {
@@ -104,11 +100,7 @@ pub async fn references(
         )));
     };
 
-    let current_file = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .analyze(&path, context.request_time)?;
+    let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     let position = params.text_document_position.position;
 

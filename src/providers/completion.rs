@@ -101,11 +101,7 @@ pub async fn completion(
         )));
     };
 
-    let current_file = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .analyze(&path, context.request_time)?;
+    let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     let offset = current_file
         .document

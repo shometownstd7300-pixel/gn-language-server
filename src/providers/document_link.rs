@@ -41,11 +41,7 @@ pub async fn document_link(
         )));
     };
 
-    let current_file = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .analyze(&path, context.request_time)?;
+    let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     let links = current_file
         .links
@@ -87,11 +83,7 @@ pub async fn document_link_resolve(
         return Err(Error::General("corrupted target link data".to_string()));
     };
 
-    let target_file = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .analyze(&data.path, context.request_time)?;
+    let target_file = context.analyzer.analyze(&data.path, context.request_time)?;
 
     let position = find_target_position(&target_file, &data.name).unwrap_or_default();
     let mut uri = Url::from_file_path(&data.path).unwrap();

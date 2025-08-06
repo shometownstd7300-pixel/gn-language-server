@@ -42,11 +42,7 @@ pub async fn goto_definition(
         )));
     };
 
-    let current_file = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .analyze(&path, context.request_time)?;
+    let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     // Check links first.
     if let Some(offset) = current_file
@@ -62,11 +58,7 @@ pub async fn goto_definition(
             let (path, position) = match link {
                 AnalyzedLink::File { path, .. } => (path, Position::default()),
                 AnalyzedLink::Target { path, name, .. } => {
-                    let target_file = context
-                        .analyzer
-                        .lock()
-                        .unwrap()
-                        .analyze(path, context.request_time)?;
+                    let target_file = context.analyzer.analyze(path, context.request_time)?;
                     (
                         path,
                         find_target_position(&target_file, name).unwrap_or_default(),

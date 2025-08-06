@@ -47,11 +47,7 @@ pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Opti
         )));
     };
 
-    let current_file = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .analyze(&path, context.request_time)?;
+    let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     let Some(ident) =
         lookup_identifier_at(&current_file, params.text_document_position_params.position)

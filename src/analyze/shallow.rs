@@ -16,7 +16,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, RwLock},
     time::Instant,
 };
 
@@ -46,7 +46,8 @@ fn is_exported(name: &str) -> bool {
 pub struct ShallowAnalyzer {
     context: WorkspaceContext,
     storage: Arc<Mutex<DocumentStorage>>,
-    cache: BTreeMap<PathBuf, Pin<Arc<ShallowAnalyzedFile>>>,
+    #[allow(clippy::type_complexity)]
+    cache: RwLock<BTreeMap<PathBuf, Arc<OnceLock<Pin<Arc<ShallowAnalyzedFile>>>>>>,
 }
 
 impl ShallowAnalyzer {
@@ -54,40 +55,24 @@ impl ShallowAnalyzer {
         Self {
             context: context.clone(),
             storage: storage.clone(),
-            cache: BTreeMap::new(),
+            cache: Default::default(),
         }
     }
 
     pub fn cached_files(&self) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
-        self.cache.values().cloned().collect()
+        let entries: Vec<_> = self.cache.read().unwrap().values().cloned().collect();
+        entries
+            .into_iter()
+            .filter_map(|entry| entry.get().cloned())
+            .collect()
     }
 
-    pub fn analyze(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<ShallowAnalyzedFile>> {
+    pub fn analyze(&self, path: &Path, request_time: Instant) -> Pin<Arc<ShallowAnalyzedFile>> {
         self.analyze_cached(path, request_time, &mut Vec::new())
     }
 
     fn analyze_cached(
-        &mut self,
-        path: &Path,
-        request_time: Instant,
-        visiting: &mut Vec<PathBuf>,
-    ) -> Pin<Arc<ShallowAnalyzedFile>> {
-        if let Some(cached_file) = self.cache.get(path) {
-            if cached_file
-                .node
-                .verify(request_time, &self.storage.lock().unwrap())
-            {
-                return cached_file.clone();
-            }
-        }
-
-        let new_file = self.analyze_uncached(path, request_time, visiting);
-        self.cache.insert(path.to_path_buf(), new_file.clone());
-        new_file
-    }
-
-    fn analyze_uncached(
-        &mut self,
+        &self,
         path: &Path,
         request_time: Instant,
         visiting: &mut Vec<PathBuf>,
@@ -96,6 +81,45 @@ impl ShallowAnalyzer {
             return ShallowAnalyzedFile::error(path, request_time);
         }
 
+        if let Some(entry) = {
+            let read_lock = self.cache.read().unwrap();
+            read_lock.get(path).cloned()
+        } {
+            let cached_file =
+                entry.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
+            if cached_file
+                .node
+                .verify(request_time, &self.storage.lock().unwrap())
+            {
+                return cached_file.clone();
+            }
+        }
+
+        loop {
+            let entry = self
+                .cache
+                .write()
+                .unwrap()
+                .entry(path.to_path_buf())
+                .or_default()
+                .clone();
+            let cached_file =
+                entry.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
+            if cached_file
+                .node
+                .verify(request_time, &self.storage.lock().unwrap())
+            {
+                return cached_file.clone();
+            }
+        }
+    }
+
+    fn analyze_uncached(
+        &self,
+        path: &Path,
+        request_time: Instant,
+        visiting: &mut Vec<PathBuf>,
+    ) -> Pin<Arc<ShallowAnalyzedFile>> {
         visiting.push(path.to_path_buf());
         let result = self.analyze_uncached_inner(path, request_time, visiting);
         visiting.pop();
@@ -103,7 +127,7 @@ impl ShallowAnalyzer {
     }
 
     fn analyze_uncached_inner(
-        &mut self,
+        &self,
         path: &Path,
         request_time: Instant,
         visiting: &mut Vec<PathBuf>,
@@ -129,7 +153,7 @@ impl ShallowAnalyzer {
     }
 
     fn analyze_block<'i, 'p>(
-        &mut self,
+        &self,
         block: &'p Block<'i>,
         request_time: Instant,
         document: &'i Document,

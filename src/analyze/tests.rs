@@ -24,7 +24,7 @@ use crate::{analyze::Analyzer, ast::Statement, storage::DocumentStorage, testuti
 #[test]
 fn test_analyze_smoke() {
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
-    let mut analyzer = Analyzer::new(&storage);
+    let analyzer = Analyzer::new(&storage);
 
     let file = analyzer
         .analyze(&testdata("workspaces/smoke/BUILD.gn"), Instant::now())
@@ -48,7 +48,7 @@ fn test_analyze_smoke() {
 fn test_analyze_cycles() {
     let request_time = Instant::now();
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
-    let mut analyzer = Analyzer::new(&storage);
+    let analyzer = Analyzer::new(&storage);
 
     assert!(analyzer
         .analyze(&testdata("workspaces/cycles/ok1.gni"), request_time)

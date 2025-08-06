@@ -16,7 +16,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, RwLock},
     time::Instant,
 };
 
@@ -39,7 +39,8 @@ pub struct FullAnalyzer {
     context: WorkspaceContext,
     shallow_analyzer: ShallowAnalyzer,
     storage: Arc<Mutex<DocumentStorage>>,
-    cache: BTreeMap<PathBuf, Pin<Arc<AnalyzedFile>>>,
+    #[allow(clippy::type_complexity)]
+    cache: RwLock<BTreeMap<PathBuf, Arc<OnceLock<Pin<Arc<AnalyzedFile>>>>>>,
 }
 
 impl FullAnalyzer {
@@ -48,7 +49,7 @@ impl FullAnalyzer {
             context: context.clone(),
             storage: storage.clone(),
             shallow_analyzer: ShallowAnalyzer::new(context, storage),
-            cache: BTreeMap::new(),
+            cache: Default::default(),
         }
     }
 
@@ -56,29 +57,43 @@ impl FullAnalyzer {
         &self.shallow_analyzer
     }
 
-    pub fn get_shallow_mut(&mut self) -> &mut ShallowAnalyzer {
-        &mut self.shallow_analyzer
-    }
-
-    pub fn analyze(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
+    pub fn analyze(&self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
         self.analyze_cached(path, request_time)
     }
 
-    fn analyze_cached(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
-        if self.cache.contains_key(path) {
-            let cached_file = self.cache.get(path).unwrap();
-            let storage = self.storage.lock().unwrap();
-            if cached_file.node.verify(request_time, &storage) {
+    fn analyze_cached(&self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
+        if let Some(entry) = {
+            let read_lock = self.cache.read().unwrap();
+            read_lock.get(path).cloned()
+        } {
+            let cached_file = entry.get_or_init(|| self.analyze_uncached(path, request_time));
+            if cached_file
+                .node
+                .verify(request_time, &self.storage.lock().unwrap())
+            {
                 return cached_file.clone();
             }
         }
 
-        let new_file = self.analyze_uncached(path, request_time);
-        self.cache.insert(path.to_path_buf(), new_file.clone());
-        new_file
+        loop {
+            let entry = self
+                .cache
+                .write()
+                .unwrap()
+                .entry(path.to_path_buf())
+                .or_default()
+                .clone();
+            let cached_file = entry.get_or_init(|| self.analyze_uncached(path, request_time));
+            if cached_file
+                .node
+                .verify(request_time, &self.storage.lock().unwrap())
+            {
+                return cached_file.clone();
+            }
+        }
     }
 
-    fn analyze_uncached(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
+    fn analyze_uncached(&self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
         let document = self.storage.lock().unwrap().read(path);
         let ast_root = Box::pin(parse(&document.data));
 
@@ -122,7 +137,7 @@ impl FullAnalyzer {
     }
 
     fn analyze_block<'i, 'p>(
-        &mut self,
+        &self,
         block: &'p Block<'i>,
         request_time: Instant,
         document: &'i Document,
@@ -329,7 +344,7 @@ impl FullAnalyzer {
     }
 
     fn analyze_expr<'i, 'p>(
-        &mut self,
+        &self,
         expr: &'p Expr<'i>,
         request_time: Instant,
         document: &'i Document,

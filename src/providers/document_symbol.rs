@@ -30,11 +30,7 @@ pub async fn document_symbol(
         )));
     };
 
-    let current_file = context
-        .analyzer
-        .lock()
-        .unwrap()
-        .analyze(&path, context.request_time)?;
+    let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     Ok(Some(DocumentSymbolResponse::Nested(
         current_file.symbols.clone(),

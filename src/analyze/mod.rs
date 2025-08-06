@@ -16,7 +16,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::Instant,
 };
 
@@ -43,23 +43,19 @@ mod tests;
 mod utils;
 
 pub struct Analyzer {
-    workspaces: BTreeMap<PathBuf, WorkspaceAnalyzer>,
     storage: Arc<Mutex<DocumentStorage>>,
+    workspaces: RwLock<BTreeMap<PathBuf, Arc<WorkspaceAnalyzer>>>,
 }
 
 impl Analyzer {
     pub fn new(storage: &Arc<Mutex<DocumentStorage>>) -> Self {
         Self {
-            workspaces: BTreeMap::new(),
             storage: storage.clone(),
+            workspaces: Default::default(),
         }
     }
 
-    pub fn analyze(
-        &mut self,
-        path: &Path,
-        request_time: Instant,
-    ) -> Result<Pin<Arc<AnalyzedFile>>> {
+    pub fn analyze(&self, path: &Path, request_time: Instant) -> Result<Pin<Arc<AnalyzedFile>>> {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
@@ -67,7 +63,7 @@ impl Analyzer {
     }
 
     pub fn analyze_shallow(
-        &mut self,
+        &self,
         path: &Path,
         request_time: Instant,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
@@ -80,13 +76,13 @@ impl Analyzer {
     }
 
     pub fn cached_files(&self, workspace_root: &Path) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
-        let Some(workspace) = self.workspaces.get(workspace_root) else {
+        let Some(workspace) = self.workspaces.read().unwrap().get(workspace_root).cloned() else {
             return Vec::new();
         };
         workspace.analyzer.get_shallow().cached_files()
     }
 
-    fn workspace_for(&mut self, path: &Path) -> Result<&mut WorkspaceAnalyzer> {
+    fn workspace_for(&self, path: &Path) -> Result<Arc<WorkspaceAnalyzer>> {
         let workspace_root = find_workspace_root(path)?;
         let dot_gn_path = workspace_root.join(".gn");
         let dot_gn_version = {
@@ -94,12 +90,13 @@ impl Analyzer {
             storage.read_version(&dot_gn_path)
         };
 
-        let cache_hit = self
-            .workspaces
-            .get(workspace_root)
-            .is_some_and(|workspace| workspace.context.dot_gn_version == dot_gn_version);
-        if cache_hit {
-            return Ok(self.workspaces.get_mut(workspace_root).unwrap());
+        {
+            let read_lock = self.workspaces.read().unwrap();
+            if let Some(workspace) = read_lock.get(workspace_root) {
+                if workspace.context.dot_gn_version == dot_gn_version {
+                    return Ok(workspace.clone());
+                }
+            }
         }
 
         let build_config = {
@@ -114,11 +111,13 @@ impl Analyzer {
             build_config,
         };
 
-        let workspace = WorkspaceAnalyzer::new(&context, &self.storage);
-        Ok(self
-            .workspaces
+        let workspace = Arc::new(WorkspaceAnalyzer::new(&context, &self.storage));
+
+        let mut write_lock = self.workspaces.write().unwrap();
+        Ok(write_lock
             .entry(workspace_root.to_path_buf())
-            .or_insert(workspace))
+            .or_insert(workspace)
+            .clone())
     }
 }
 
@@ -135,15 +134,15 @@ impl WorkspaceAnalyzer {
         }
     }
 
-    pub fn analyze(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
+    pub fn analyze(&self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
         self.analyzer.analyze(path, request_time)
     }
 
     pub fn analyze_shallow(
-        &mut self,
+        &self,
         path: &Path,
         request_time: Instant,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
-        self.analyzer.get_shallow_mut().analyze(path, request_time)
+        self.analyzer.get_shallow().analyze(path, request_time)
     }
 }
