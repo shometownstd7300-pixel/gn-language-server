@@ -106,11 +106,7 @@ impl AnalysisNode {
         true
     }
 
-    fn verify_deps(
-        &self,
-        request_time: Instant,
-        storage: &DocumentStorage,
-    ) -> bool {
+    fn verify_deps(&self, request_time: Instant, storage: &DocumentStorage) -> bool {
         for dep in &self.deps {
             if !dep.verify(request_time, storage) {
                 return false;

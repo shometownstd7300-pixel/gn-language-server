@@ -171,14 +171,14 @@ pub async fn completion(
                     _ => unreachable!(),
                 }
             } else {
-                format!("{} = ...", name)
+                format!("{name} = ...")
             };
             Some(CompletionItem {
                 label: name.to_string(),
                 kind: Some(CompletionItemKind::VARIABLE),
                 documentation: Some(Documentation::MarkupContent(MarkupContent {
                     kind: MarkupKind::Markdown,
-                    value: format!("```gn\n{}\n```\n", snippet),
+                    value: format!("```gn\n{snippet}\n```\n"),
                 })),
                 ..Default::default()
             })

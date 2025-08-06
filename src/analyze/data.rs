@@ -247,6 +247,7 @@ pub struct AnalyzedFile {
 }
 
 impl AnalyzedFile {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         document: Pin<Arc<Document>>,
         workspace_root: PathBuf,

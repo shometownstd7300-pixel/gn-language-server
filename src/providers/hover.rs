@@ -216,8 +216,7 @@ mod tests {
                     MarkedString::from_language_code("gn".to_string(), "a = 1".to_string()),
                     MarkedString::from_language_code("text".to_string(), "".to_string()),
                     MarkedString::from_markdown(format!(
-                        "Defined at [//BUILD.gn:18:1]({}#L18,1)",
-                        uri
+                        "Defined at [//BUILD.gn:18:1]({uri}#L18,1)"
                     )),
                 ]),
                 range: Some(Range {

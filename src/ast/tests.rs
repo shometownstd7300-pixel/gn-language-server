@@ -21,9 +21,7 @@ fn parse_no_errors(input: &str) {
     let errors: Vec<_> = block.errors().collect();
     assert!(
         errors.is_empty(),
-        "parse failed!\n\tinput = {:?}\n\terrors = {:?}",
-        input,
-        errors
+        "parse failed!\n\tinput = {input:?}\n\terrors = {errors:?}"
     );
 }
 
