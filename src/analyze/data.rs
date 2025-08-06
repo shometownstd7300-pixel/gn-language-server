@@ -24,7 +24,7 @@ use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
-    analyze::utils::{resolve_path, CachedVerifier},
+    analyze::{cache::CachedVerifier, utils::resolve_path},
     ast::{parse, Block, Call, Comments, Statement},
     storage::{Document, DocumentVersion},
 };

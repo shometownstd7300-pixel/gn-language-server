@@ -32,6 +32,7 @@ use crate::{
     utils::find_workspace_root,
 };
 
+mod cache;
 mod data;
 mod dotgn;
 mod full;

@@ -24,13 +24,13 @@ use either::Either;
 
 use crate::{
     analyze::{
+        cache::CachedVerifier,
         data::{
             AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable,
             MutableShallowAnalyzedBlock, ShallowAnalyzedBlock, ShallowAnalyzedFile,
             WorkspaceContext,
         },
         links::collect_links,
-        utils::CachedVerifier,
         AnalyzedLink,
     },
     ast::{parse, Block, Comments, LValue, Node, Statement},

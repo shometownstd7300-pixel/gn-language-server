@@ -12,102 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, RwLock},
-    time::{Duration, Instant},
-};
-
-use crate::storage::{DocumentStorage, DocumentVersion};
+use std::path::{Path, PathBuf};
 
 pub fn resolve_path(name: &str, root_dir: &Path, current_dir: &Path) -> PathBuf {
     if let Some(rest) = name.strip_prefix("//") {
         root_dir.join(rest)
     } else {
         current_dir.join(name)
-    }
-}
-
-const VERIFY_INTERVAL: Duration = Duration::from_secs(5);
-
-fn compute_next_verify(t: Instant, version: DocumentVersion) -> Instant {
-    match version {
-        DocumentVersion::OnDisk { .. }
-        | DocumentVersion::IoError
-        | DocumentVersion::AnalysisError => t + VERIFY_INTERVAL,
-        // Do not skip verification for in-memory documents.
-        DocumentVersion::InMemory { .. } => t,
-    }
-}
-
-enum CachedVerifierState {
-    Stale,
-    ReverifyAfter(Instant),
-}
-
-pub struct CachedVerifier {
-    path: PathBuf,
-    version: DocumentVersion,
-    deps: Vec<Arc<CachedVerifier>>,
-    state: RwLock<CachedVerifierState>,
-}
-
-impl CachedVerifier {
-    pub fn new(
-        path: PathBuf,
-        version: DocumentVersion,
-        deps: Vec<Arc<CachedVerifier>>,
-        request_time: Instant,
-    ) -> Self {
-        Self {
-            path,
-            version,
-            deps,
-            state: RwLock::new(CachedVerifierState::ReverifyAfter(compute_next_verify(
-                request_time,
-                version,
-            ))),
-        }
-    }
-
-    pub fn verify(&self, request_time: Instant, storage: &DocumentStorage) -> bool {
-        {
-            let state_guard = self.state.read().unwrap();
-            let expires = match &*state_guard {
-                CachedVerifierState::Stale => return false,
-                CachedVerifierState::ReverifyAfter(expires) => *expires,
-            };
-            if request_time <= expires {
-                return true;
-            }
-        }
-
-        {
-            let mut state_guard = self.state.write().unwrap();
-            let expires = match &*state_guard {
-                CachedVerifierState::Stale => return false,
-                CachedVerifierState::ReverifyAfter(expires) => *expires,
-            };
-            if request_time <= expires {
-                return true;
-            }
-
-            let version = storage.read_version(&self.path);
-            if version != self.version {
-                *state_guard = CachedVerifierState::Stale;
-                return false;
-            }
-
-            for dep in &self.deps {
-                if !dep.verify(request_time, storage) {
-                    *state_guard = CachedVerifierState::Stale;
-                    return false;
-                }
-            }
-
-            *state_guard =
-                CachedVerifierState::ReverifyAfter(compute_next_verify(request_time, self.version));
-            true
-        }
     }
 }

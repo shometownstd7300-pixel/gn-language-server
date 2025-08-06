@@ -25,8 +25,8 @@ use pest::Span;
 
 use crate::{
     analyze::{
-        links::collect_links, shallow::ShallowAnalyzer, symbols::collect_symbols,
-        utils::CachedVerifier, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
+        cache::CachedVerifier, links::collect_links, shallow::ShallowAnalyzer,
+        symbols::collect_symbols, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
         AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
     },
     ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
