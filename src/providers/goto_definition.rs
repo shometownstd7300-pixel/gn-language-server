@@ -19,8 +19,8 @@ use tower_lsp::lsp_types::{
 use crate::{
     analyze::AnalyzedLink,
     ast::Node,
-    error::{Error, Result},
-    providers::lookup_target_name_string_at,
+    error::Result,
+    providers::{get_text_document_path, lookup_target_name_string_at},
     server::RequestContext,
 };
 
@@ -30,18 +30,7 @@ pub async fn goto_definition(
     context: &RequestContext,
     params: GotoDefinitionParams,
 ) -> Result<Option<GotoDefinitionResponse>> {
-    let Ok(path) = params
-        .text_document_position_params
-        .text_document
-        .uri
-        .to_file_path()
-    else {
-        return Err(Error::General(format!(
-            "invalid file URI: {}",
-            params.text_document_position_params.text_document.uri
-        )));
-    };
-
+    let path = get_text_document_path(&params.text_document_position_params.text_document)?;
     let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     // Check links first.

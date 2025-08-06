@@ -23,7 +23,8 @@ use tower_lsp::lsp_types::{
 use crate::{
     ast::{Block, Node, Statement},
     builtins::BUILTINS,
-    error::{Error, Result},
+    error::Result,
+    providers::get_text_document_path,
     server::RequestContext,
 };
 
@@ -89,18 +90,7 @@ pub async fn completion(
     context: &RequestContext,
     params: CompletionParams,
 ) -> Result<Option<CompletionResponse>> {
-    let Ok(path) = params
-        .text_document_position
-        .text_document
-        .uri
-        .to_file_path()
-    else {
-        return Err(Error::General(format!(
-            "invalid file URI: {}",
-            params.text_document_position.text_document.uri
-        )));
-    };
-
+    let path = get_text_document_path(&params.text_document_position.text_document)?;
     let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     let offset = current_file

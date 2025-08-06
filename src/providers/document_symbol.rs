@@ -14,22 +14,13 @@
 
 use tower_lsp::lsp_types::{DocumentSymbolParams, DocumentSymbolResponse};
 
-use crate::{
-    error::{Error, Result},
-    server::RequestContext,
-};
+use crate::{error::Result, providers::get_text_document_path, server::RequestContext};
 
 pub async fn document_symbol(
     context: &RequestContext,
     params: DocumentSymbolParams,
 ) -> Result<Option<DocumentSymbolResponse>> {
-    let Ok(path) = params.text_document.uri.to_file_path() else {
-        return Err(Error::General(format!(
-            "invalid file URI: {}",
-            params.text_document.uri
-        )));
-    };
-
+    let path = get_text_document_path(&params.text_document)?;
     let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     Ok(Some(DocumentSymbolResponse::Nested(

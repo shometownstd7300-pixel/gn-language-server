@@ -19,6 +19,7 @@ use tower_lsp::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 use crate::{
     analyze::AnalyzedLink,
     error::{Error, Result},
+    providers::get_text_document_path,
     server::RequestContext,
 };
 
@@ -34,13 +35,7 @@ pub async fn document_link(
     context: &RequestContext,
     params: DocumentLinkParams,
 ) -> Result<Option<Vec<DocumentLink>>> {
-    let Ok(path) = params.text_document.uri.to_file_path() else {
-        return Err(Error::General(format!(
-            "invalid file URI: {}",
-            params.text_document.uri
-        )));
-    };
-
+    let path = get_text_document_path(&params.text_document)?;
     let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     let links = current_file

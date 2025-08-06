@@ -24,6 +24,7 @@ use tower_lsp::lsp_types::{DocumentFormattingParams, TextEdit};
 use crate::{
     binary::find_gn_binary,
     error::{Error, Result},
+    providers::get_text_document_path,
     server::RequestContext,
     utils::find_workspace_root,
 };
@@ -32,12 +33,7 @@ pub async fn formatting(
     context: &RequestContext,
     params: DocumentFormattingParams,
 ) -> Result<Option<Vec<TextEdit>>> {
-    let Ok(file_path) = params.text_document.uri.to_file_path() else {
-        return Err(Error::General(format!(
-            "invalid file URI: {}",
-            params.text_document.uri
-        )));
-    };
+    let file_path = get_text_document_path(&params.text_document)?;
 
     let configs = context.client.configurations().await;
     let gn_path = if let Some(gn_path) = &configs.binary_path {

@@ -20,7 +20,8 @@ use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkedString, Url}
 use crate::{
     ast::{Node, Statement},
     builtins::BUILTINS,
-    error::{Error, Result},
+    error::Result,
+    providers::get_text_document_path,
     server::RequestContext,
 };
 
@@ -35,18 +36,7 @@ fn format_path(path: &Path, workspace_root: &Path) -> String {
 }
 
 pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Option<Hover>> {
-    let Ok(path) = params
-        .text_document_position_params
-        .text_document
-        .uri
-        .to_file_path()
-    else {
-        return Err(Error::General(format!(
-            "invalid file URI: {}",
-            params.text_document_position_params.text_document.uri
-        )));
-    };
-
+    let path = get_text_document_path(&params.text_document_position_params.text_document)?;
     let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     let Some(ident) =

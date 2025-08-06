@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::PathBuf;
+
 use itertools::Itertools;
-use tower_lsp::lsp_types::Position;
+use tower_lsp::lsp_types::{Position, TextDocumentIdentifier};
 
 use crate::{
     analyze::{AnalyzedEvent, AnalyzedFile, AnalyzedTarget},
     ast::{Identifier, Node},
+    error::{Error, Result},
 };
 
 pub mod completion;
@@ -31,6 +34,13 @@ pub mod goto_definition;
 pub mod hover;
 pub mod indexing;
 pub mod references;
+
+pub fn get_text_document_path(text_document: &TextDocumentIdentifier) -> Result<PathBuf> {
+    text_document
+        .uri
+        .to_file_path()
+        .map_err(|_| Error::General(format!("invalid file URI: {}", text_document.uri)))
+}
 
 pub fn lookup_identifier_at(file: &AnalyzedFile, position: Position) -> Option<&Identifier> {
     let offset = file.document.line_index.offset(position)?;

@@ -17,7 +17,7 @@ use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
 use crate::{
     analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedLink},
     error::{Error, Result},
-    providers::lookup_target_name_string_at,
+    providers::{get_text_document_path, lookup_target_name_string_at},
     server::RequestContext,
     utils::find_workspace_root,
 };
@@ -88,18 +88,7 @@ pub async fn references(
         return Ok(None);
     }
 
-    let Ok(path) = params
-        .text_document_position
-        .text_document
-        .uri
-        .to_file_path()
-    else {
-        return Err(Error::General(format!(
-            "invalid file URI: {}",
-            params.text_document_position.text_document.uri
-        )));
-    };
-
+    let path = get_text_document_path(&params.text_document_position.text_document)?;
     let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
     let position = params.text_document_position.position;
