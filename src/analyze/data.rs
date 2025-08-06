@@ -24,7 +24,7 @@ use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
-    analyze::{cache::CachedVerifier, utils::resolve_path},
+    analyze::{cache::AnalysisNode, utils::resolve_path},
     ast::{parse, Block, Call, Comments, Statement},
     storage::{Document, DocumentVersion},
 };
@@ -143,7 +143,7 @@ pub struct ShallowAnalyzedFile {
     pub ast_root: Pin<Box<Block<'static>>>,
     pub analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
-    pub verifier: Arc<CachedVerifier>,
+    pub node: Arc<AnalysisNode>,
 }
 
 impl ShallowAnalyzedFile {
@@ -152,10 +152,10 @@ impl ShallowAnalyzedFile {
         ast_root: Pin<Box<Block<'static>>>,
         analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
-        deps: Vec<Arc<CachedVerifier>>,
+        deps: Vec<Arc<AnalysisNode>>,
         request_time: Instant,
     ) -> Pin<Arc<Self>> {
-        let verifier = Arc::new(CachedVerifier::new(
+        let node = Arc::new(AnalysisNode::new(
             document.path.clone(),
             document.version,
             deps,
@@ -166,7 +166,7 @@ impl ShallowAnalyzedFile {
             ast_root,
             analyzed_root,
             links,
-            verifier,
+            node,
         })
     }
 
@@ -243,7 +243,7 @@ pub struct AnalyzedFile {
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub symbols: Vec<DocumentSymbol>,
-    pub verifier: Arc<CachedVerifier>,
+    pub node: Arc<AnalysisNode>,
 }
 
 impl AnalyzedFile {
@@ -254,10 +254,10 @@ impl AnalyzedFile {
         analyzed_root: AnalyzedBlock<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
         symbols: Vec<DocumentSymbol>,
-        deps: Vec<Arc<CachedVerifier>>,
+        deps: Vec<Arc<AnalysisNode>>,
         request_time: Instant,
     ) -> Pin<Arc<Self>> {
-        let verifier = Arc::new(CachedVerifier::new(
+        let node = Arc::new(AnalysisNode::new(
             document.path.clone(),
             document.version,
             deps,
@@ -271,7 +271,7 @@ impl AnalyzedFile {
             analyzed_root,
             links,
             symbols,
-            verifier,
+            node,
         })
     }
 

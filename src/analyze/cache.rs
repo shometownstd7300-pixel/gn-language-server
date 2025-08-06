@@ -32,33 +32,32 @@ fn compute_next_verify(t: Instant, version: DocumentVersion) -> Instant {
     }
 }
 
-enum CachedVerifierState {
+enum CacheState {
     Stale,
-    ReverifyAfter(Instant),
+    Fresh { expires: Instant },
 }
 
-pub struct CachedVerifier {
+pub struct AnalysisNode {
     path: PathBuf,
     version: DocumentVersion,
-    deps: Vec<Arc<CachedVerifier>>,
-    state: RwLock<CachedVerifierState>,
+    deps: Vec<Arc<AnalysisNode>>,
+    state: RwLock<CacheState>,
 }
 
-impl CachedVerifier {
+impl AnalysisNode {
     pub fn new(
         path: PathBuf,
         version: DocumentVersion,
-        deps: Vec<Arc<CachedVerifier>>,
+        deps: Vec<Arc<AnalysisNode>>,
         request_time: Instant,
     ) -> Self {
         Self {
             path,
             version,
             deps,
-            state: RwLock::new(CachedVerifierState::ReverifyAfter(compute_next_verify(
-                request_time,
-                version,
-            ))),
+            state: RwLock::new(CacheState::Fresh {
+                expires: compute_next_verify(request_time, version),
+            }),
         }
     }
 
@@ -66,40 +65,39 @@ impl CachedVerifier {
         {
             let state_guard = self.state.read().unwrap();
             let expires = match &*state_guard {
-                CachedVerifierState::Stale => return false,
-                CachedVerifierState::ReverifyAfter(expires) => *expires,
+                CacheState::Stale => return false,
+                CacheState::Fresh { expires } => *expires,
             };
             if request_time <= expires {
                 return true;
             }
         }
 
-        {
-            let mut state_guard = self.state.write().unwrap();
-            let expires = match &*state_guard {
-                CachedVerifierState::Stale => return false,
-                CachedVerifierState::ReverifyAfter(expires) => *expires,
-            };
-            if request_time <= expires {
-                return true;
-            }
+        let mut state_guard = self.state.write().unwrap();
+        let expires = match &*state_guard {
+            CacheState::Stale => return false,
+            CacheState::Fresh { expires } => *expires,
+        };
+        if request_time <= expires {
+            return true;
+        }
 
-            let version = storage.read_version(&self.path);
-            if version != self.version {
-                *state_guard = CachedVerifierState::Stale;
+        let version = storage.read_version(&self.path);
+        if version != self.version {
+            *state_guard = CacheState::Stale;
+            return false;
+        }
+
+        for dep in &self.deps {
+            if !dep.verify(request_time, storage) {
+                *state_guard = CacheState::Stale;
                 return false;
             }
-
-            for dep in &self.deps {
-                if !dep.verify(request_time, storage) {
-                    *state_guard = CachedVerifierState::Stale;
-                    return false;
-                }
-            }
-
-            *state_guard =
-                CachedVerifierState::ReverifyAfter(compute_next_verify(request_time, self.version));
-            true
         }
+
+        *state_guard = CacheState::Fresh {
+            expires: compute_next_verify(request_time, self.version),
+        };
+        true
     }
 }

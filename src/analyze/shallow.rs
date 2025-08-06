@@ -24,7 +24,7 @@ use either::Either;
 
 use crate::{
     analyze::{
-        cache::CachedVerifier,
+        cache::AnalysisNode,
         data::{
             AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable,
             MutableShallowAnalyzedBlock, ShallowAnalyzedBlock, ShallowAnalyzedFile,
@@ -74,7 +74,7 @@ impl ShallowAnalyzer {
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         if let Some(cached_file) = self.cache.get(path) {
             if cached_file
-                .verifier
+                .node
                 .verify(request_time, &self.storage.lock().unwrap())
             {
                 return cached_file.clone();
@@ -133,7 +133,7 @@ impl ShallowAnalyzer {
         block: &'p Block<'i>,
         request_time: Instant,
         document: &'i Document,
-        deps: &mut Vec<Arc<CachedVerifier>>,
+        deps: &mut Vec<Arc<AnalysisNode>>,
         visiting: &mut Vec<PathBuf>,
     ) -> ShallowAnalyzedBlock<'i, 'p> {
         let mut analyzed_block = MutableShallowAnalyzedBlock::new_top_level();
@@ -177,7 +177,7 @@ impl ShallowAnalyzer {
                                 .resolve_path(name, document.path.parent().unwrap());
                             let file = self.analyze_cached(&path, request_time, visiting);
                             analyzed_block.import(&file.analyzed_root);
-                            deps.push(file.verifier.clone());
+                            deps.push(file.node.clone());
                         }
                     }
                     TEMPLATE => {

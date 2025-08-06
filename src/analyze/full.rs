@@ -25,7 +25,7 @@ use pest::Span;
 
 use crate::{
     analyze::{
-        cache::CachedVerifier, links::collect_links, shallow::ShallowAnalyzer,
+        cache::AnalysisNode, links::collect_links, shallow::ShallowAnalyzer,
         symbols::collect_symbols, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
         AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
     },
@@ -68,7 +68,7 @@ impl FullAnalyzer {
         if self.cache.contains_key(path) {
             let cached_file = self.cache.get(path).unwrap();
             let storage = self.storage.lock().unwrap();
-            if cached_file.verifier.verify(request_time, &storage) {
+            if cached_file.node.verify(request_time, &storage) {
                 return cached_file.clone();
             }
         }
@@ -96,7 +96,7 @@ impl FullAnalyzer {
                 span: Span::new(&document.data, 0, 0).unwrap(),
             }),
         );
-        deps.push(dot_gn_file.verifier.clone());
+        deps.push(dot_gn_file.node.clone());
 
         let links = collect_links(&ast_root, path, &self.context);
         let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
@@ -126,7 +126,7 @@ impl FullAnalyzer {
         block: &'p Block<'i>,
         request_time: Instant,
         document: &'i Document,
-        deps: &mut Vec<Arc<CachedVerifier>>,
+        deps: &mut Vec<Arc<AnalysisNode>>,
     ) -> AnalyzedBlock<'i, 'p> {
         let events: Vec<AnalyzedEvent> = block
             .statements
@@ -166,7 +166,7 @@ impl FullAnalyzer {
                                     .context
                                     .resolve_path(name, document.path.parent().unwrap());
                                 let file = self.shallow_analyzer.analyze(&path, request_time);
-                                deps.push(file.verifier.clone());
+                                deps.push(file.node.clone());
                                 vec![AnalyzedEvent::Import(AnalyzedImport {
                                     file,
                                     span: call.span(),
@@ -333,7 +333,7 @@ impl FullAnalyzer {
         expr: &'p Expr<'i>,
         request_time: Instant,
         document: &'i Document,
-        deps: &mut Vec<Arc<CachedVerifier>>,
+        deps: &mut Vec<Arc<AnalysisNode>>,
     ) -> Vec<AnalyzedEvent<'i, 'p>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
