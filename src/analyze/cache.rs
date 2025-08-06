@@ -62,23 +62,30 @@ impl AnalysisNode {
     }
 
     pub fn verify(&self, request_time: Instant, storage: &DocumentStorage) -> bool {
-        {
-            let state_guard = self.state.read().unwrap();
-            let expires = match &*state_guard {
-                CacheState::Stale => return false,
-                CacheState::Fresh { expires } => *expires,
-            };
-            if request_time <= expires {
-                return true;
+        // Fast path with a read lock.
+        let expires = match &*self.state.read().unwrap() {
+            CacheState::Stale => return false,
+            CacheState::Fresh { expires } => *expires,
+        };
+        if request_time <= expires {
+            if !self.verify_deps(request_time, storage) {
+                *self.state.write().unwrap() = CacheState::Stale;
+                return false;
             }
+            return true;
         }
 
+        // Slow path with a write lock.
         let mut state_guard = self.state.write().unwrap();
         let expires = match &*state_guard {
             CacheState::Stale => return false,
             CacheState::Fresh { expires } => *expires,
         };
         if request_time <= expires {
+            if !self.verify_deps(request_time, storage) {
+                *state_guard = CacheState::Stale;
+                return false;
+            }
             return true;
         }
 
@@ -88,16 +95,27 @@ impl AnalysisNode {
             return false;
         }
 
-        for dep in &self.deps {
-            if !dep.verify(request_time, storage) {
-                *state_guard = CacheState::Stale;
-                return false;
-            }
+        if !self.verify_deps(request_time, storage) {
+            *state_guard = CacheState::Stale;
+            return false;
         }
 
         *state_guard = CacheState::Fresh {
             expires: compute_next_verify(request_time, self.version),
         };
+        true
+    }
+
+    fn verify_deps(
+        &self,
+        request_time: Instant,
+        storage: &DocumentStorage,
+    ) -> bool {
+        for dep in &self.deps {
+            if !dep.verify(request_time, storage) {
+                return false;
+            }
+        }
         true
     }
 }
