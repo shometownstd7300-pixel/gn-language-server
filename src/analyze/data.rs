@@ -283,10 +283,6 @@ impl AnalyzedFile {
     pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateEnv {
         self.analyzed_root.templates_at(pos)
     }
-
-    pub fn targets_at(&self, pos: usize) -> AnalyzedTargetEnv {
-        self.analyzed_root.targets_at(pos)
-    }
 }
 
 pub struct AnalyzedBlock<'i, 'p> {
@@ -374,46 +370,6 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
             }
         }
         templates
-    }
-
-    pub fn targets_at(&self, pos: usize) -> AnalyzedTargetEnv<'i, 'p> {
-        let mut targets = AnalyzedTargetEnv::new(None);
-        for event in &self.events {
-            match event {
-                AnalyzedEvent::Conditions(blocks) => {
-                    if blocks.last().unwrap().span.end() <= pos {
-                        for block in blocks {
-                            targets.merge(block.targets_at(pos));
-                        }
-                    } else {
-                        for block in blocks {
-                            if block.span.start() <= pos && pos <= block.span.end() {
-                                targets.merge(block.targets_at(pos));
-                            }
-                        }
-                    }
-                }
-                AnalyzedEvent::Import(import) => {
-                    if import.span.end() <= pos {
-                        targets.merge(import.file.analyzed_root.targets.as_ref().clone());
-                    }
-                }
-                AnalyzedEvent::Target(target) => {
-                    if target.span.end() <= pos {
-                        targets.insert(target.name, target.clone());
-                    }
-                }
-                AnalyzedEvent::NewScope(block) => {
-                    if block.span.start() <= pos && pos <= block.span.end() {
-                        targets.merge(block.targets_at(pos));
-                    }
-                }
-                AnalyzedEvent::Assignment(_)
-                | AnalyzedEvent::DeclareArgs(_)
-                | AnalyzedEvent::Template(_) => {}
-            }
-        }
-        targets
     }
 }
 

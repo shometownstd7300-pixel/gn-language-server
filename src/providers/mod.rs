@@ -18,7 +18,7 @@ use itertools::Itertools;
 use tower_lsp::lsp_types::{Position, TextDocumentIdentifier};
 
 use crate::{
-    analyze::{AnalyzedEvent, AnalyzedFile, AnalyzedTarget},
+    analyze::{AnalyzedEvent, AnalyzedFile, AnalyzedTarget, ShallowAnalyzedFile},
     ast::{Identifier, Node},
     error::{Error, Result},
 };
@@ -63,10 +63,13 @@ pub fn lookup_target_name_string_at(
         .find(|target| target.header.start() < offset && offset < target.header.end())
 }
 
-/// Finds the position of a target.
-pub fn find_target_position(file: &AnalyzedFile, name: &str) -> Option<Position> {
-    let targets = file.targets_at(usize::MAX);
-    let targets: Vec<_> = targets
+pub fn find_target<'a>(
+    file: &'a ShallowAnalyzedFile,
+    name: &str,
+) -> Option<&'a AnalyzedTarget<'static, 'static>> {
+    let targets: Vec<_> = file
+        .analyzed_root
+        .targets
         .items()
         .values()
         .sorted_by_key(|target| (&target.document.path, target.span.start()))
@@ -75,7 +78,7 @@ pub fn find_target_position(file: &AnalyzedFile, name: &str) -> Option<Position>
     // Try target name prefixes.
     for name in (1..=name.len()).rev().map(|len| &name[..len]) {
         if let Some(target) = targets.iter().find(|t| t.name == name) {
-            return Some(target.document.line_index.position(target.span.start()));
+            return Some(target);
         }
     }
 

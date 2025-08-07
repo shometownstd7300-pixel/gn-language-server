@@ -24,7 +24,7 @@ use crate::{
     server::RequestContext,
 };
 
-use super::{find_target_position, lookup_identifier_at};
+use super::{find_target, lookup_identifier_at};
 
 pub async fn goto_definition(
     context: &RequestContext,
@@ -47,10 +47,19 @@ pub async fn goto_definition(
             let (path, position) = match link {
                 AnalyzedLink::File { path, .. } => (path, Position::default()),
                 AnalyzedLink::Target { path, name, .. } => {
-                    let target_file = context.analyzer.analyze(path, context.request_time)?;
+                    let target_file = context
+                        .analyzer
+                        .analyze_shallow(path, context.request_time)?;
                     (
                         path,
-                        find_target_position(&target_file, name).unwrap_or_default(),
+                        find_target(&target_file, name)
+                            .map(|target| {
+                                target
+                                    .document
+                                    .line_index
+                                    .position(target.call.span.start())
+                            })
+                            .unwrap_or_default(),
                     )
                 }
             };

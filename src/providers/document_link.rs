@@ -19,11 +19,9 @@ use tower_lsp::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 use crate::{
     analyze::AnalyzedLink,
     error::{Error, Result},
-    providers::get_text_document_path,
+    providers::{find_target, get_text_document_path},
     server::RequestContext,
 };
-
-use super::find_target_position;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TargetLinkData {
@@ -78,9 +76,18 @@ pub async fn document_link_resolve(
         return Err(Error::General("corrupted target link data".to_string()));
     };
 
-    let target_file = context.analyzer.analyze(&data.path, context.request_time)?;
+    let target_file = context
+        .analyzer
+        .analyze_shallow(&data.path, context.request_time)?;
 
-    let position = find_target_position(&target_file, &data.name).unwrap_or_default();
+    let position = find_target(&target_file, &data.name)
+        .map(|target| {
+            target
+                .document
+                .line_index
+                .position(target.call.span.start())
+        })
+        .unwrap_or_default();
     let mut uri = Url::from_file_path(&data.path).unwrap();
     uri.set_fragment(Some(&format!(
         "L{},{}",
