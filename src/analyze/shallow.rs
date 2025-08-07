@@ -47,7 +47,7 @@ pub struct ShallowAnalyzer {
     context: WorkspaceContext,
     storage: Arc<Mutex<DocumentStorage>>,
     #[allow(clippy::type_complexity)]
-    cache: RwLock<BTreeMap<PathBuf, Arc<OnceLock<Pin<Arc<ShallowAnalyzedFile>>>>>>,
+    cache: RwLock<BTreeMap<PathBuf, Arc<RwLock<OnceLock<Pin<Arc<ShallowAnalyzedFile>>>>>>>,
 }
 
 impl ShallowAnalyzer {
@@ -63,7 +63,14 @@ impl ShallowAnalyzer {
         let entries: Vec<_> = self.cache.read().unwrap().values().cloned().collect();
         entries
             .into_iter()
-            .filter_map(|entry| entry.get().cloned())
+            .filter_map(|entry| {
+                if let Ok(once) = entry.try_read() {
+                    if let Some(cached_file) = once.get() {
+                        return Some(cached_file.clone());
+                    }
+                }
+                None
+            })
             .collect()
     }
 
@@ -81,12 +88,21 @@ impl ShallowAnalyzer {
             return ShallowAnalyzedFile::error(path, request_time);
         }
 
-        if let Some(entry) = {
+        let entry = {
             let read_lock = self.cache.read().unwrap();
-            read_lock.get(path).cloned()
-        } {
+            if let Some(entry) = read_lock.get(path) {
+                entry.clone()
+            } else {
+                drop(read_lock);
+                let mut write_lock = self.cache.write().unwrap();
+                write_lock.entry(path.to_path_buf()).or_default().clone()
+            }
+        };
+
+        {
+            let read_lock = entry.read().unwrap();
             let cached_file =
-                entry.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
+                read_lock.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
             if cached_file
                 .node
                 .verify(request_time, &self.storage.lock().unwrap())
@@ -95,23 +111,27 @@ impl ShallowAnalyzer {
             }
         }
 
-        loop {
-            let entry = self
-                .cache
-                .write()
-                .unwrap()
-                .entry(path.to_path_buf())
-                .or_default()
-                .clone();
-            let cached_file =
-                entry.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
-            if cached_file
-                .node
-                .verify(request_time, &self.storage.lock().unwrap())
-            {
-                return cached_file.clone();
-            }
+        let mut write_lock = entry.write().unwrap();
+
+        let cached_file =
+            write_lock.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
+        if cached_file
+            .node
+            .verify(request_time, &self.storage.lock().unwrap())
+        {
+            return cached_file.clone();
         }
+
+        *write_lock = Default::default();
+        let cached_file =
+            write_lock.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
+        if cached_file
+            .node
+            .verify(request_time, &self.storage.lock().unwrap())
+        {
+            return cached_file.clone();
+        }
+        unreachable!();
     }
 
     fn analyze_uncached(
