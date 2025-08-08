@@ -19,7 +19,7 @@ use tower_lsp::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 use crate::{
     analyze::AnalyzedLink,
     error::{Error, Result},
-    providers::{find_target, get_text_document_path},
+    providers::utils::{find_target, get_text_document_path},
     server::RequestContext,
 };
 

@@ -24,6 +24,7 @@ mod builtins;
 mod client;
 mod config;
 mod error;
+mod indexing;
 mod providers;
 mod server;
 mod storage;

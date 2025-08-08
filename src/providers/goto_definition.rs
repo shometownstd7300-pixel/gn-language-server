@@ -20,11 +20,11 @@ use crate::{
     analyze::AnalyzedLink,
     ast::Node,
     error::Result,
-    providers::{get_text_document_path, lookup_target_name_string_at},
+    providers::utils::{
+        find_target, get_text_document_path, lookup_identifier_at, lookup_target_name_string_at,
+    },
     server::RequestContext,
 };
-
-use super::{find_target, lookup_identifier_at};
 
 pub async fn goto_definition(
     context: &RequestContext,

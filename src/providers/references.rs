@@ -17,7 +17,7 @@ use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
 use crate::{
     analyze::{AnalyzedBlock, AnalyzedFile, AnalyzedLink},
     error::{Error, Result},
-    providers::{get_text_document_path, lookup_target_name_string_at},
+    providers::utils::{get_text_document_path, lookup_target_name_string_at},
     server::RequestContext,
     utils::find_nearest_workspace_root,
 };

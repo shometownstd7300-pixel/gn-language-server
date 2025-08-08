@@ -21,11 +21,9 @@ use crate::{
     ast::{Node, Statement},
     builtins::BUILTINS,
     error::Result,
-    providers::get_text_document_path,
+    providers::utils::{get_text_document_path, lookup_identifier_at},
     server::RequestContext,
 };
-
-use super::lookup_identifier_at;
 
 fn format_path(path: &Path, workspace_root: &Path) -> String {
     if let Ok(relative_path) = path.strip_prefix(workspace_root) {

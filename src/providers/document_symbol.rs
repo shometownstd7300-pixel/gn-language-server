@@ -14,7 +14,7 @@
 
 use tower_lsp::lsp_types::{DocumentSymbolParams, DocumentSymbolResponse};
 
-use crate::{error::Result, providers::get_text_document_path, server::RequestContext};
+use crate::{error::Result, providers::utils::get_text_document_path, server::RequestContext};
 
 pub async fn document_symbol(
     context: &RequestContext,

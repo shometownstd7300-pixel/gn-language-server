@@ -24,7 +24,7 @@ use tower_lsp::lsp_types::{DocumentFormattingParams, TextEdit};
 use crate::{
     binary::find_gn_binary,
     error::{Error, Result},
-    providers::get_text_document_path,
+    providers::utils::get_text_document_path,
     server::RequestContext,
     utils::find_nearest_workspace_root,
 };

@@ -24,7 +24,7 @@ use crate::{
     ast::{Block, Node, Statement},
     builtins::BUILTINS,
     error::Result,
-    providers::get_text_document_path,
+    providers::utils::get_text_document_path,
     server::RequestContext,
 };
 

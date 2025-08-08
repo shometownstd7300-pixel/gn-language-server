@@ -137,7 +137,7 @@ impl Backend {
 
         let context = context.clone();
         spawn(async move {
-            crate::providers::indexing::index(&context, &workspace_root, parallel_indexing).await;
+            crate::indexing::index(&context, &workspace_root, parallel_indexing).await;
             indexed.set();
         });
     }
