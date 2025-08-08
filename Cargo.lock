@@ -317,6 +317,7 @@ dependencies = [
  "either",
  "futures",
  "itertools",
+ "normalize-path",
  "pest",
  "pest_derive",
  "serde",
@@ -578,6 +579,12 @@ dependencies = [
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "normalize-path"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5438dd2b2ff4c6df6e1ce22d825ed2fa93ee2922235cc45186991717f0a892d"
 
 [[package]]
 name = "object"

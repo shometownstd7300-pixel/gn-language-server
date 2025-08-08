@@ -14,10 +14,13 @@
 
 use std::path::{Path, PathBuf};
 
+use normalize_path::NormalizePath;
+
 pub fn resolve_path(name: &str, root_dir: &Path, current_dir: &Path) -> PathBuf {
     if let Some(rest) = name.strip_prefix("//") {
         root_dir.join(rest)
     } else {
         current_dir.join(name)
     }
+    .normalize()
 }
