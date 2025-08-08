@@ -43,8 +43,17 @@ pub fn collect_symbols(node: &dyn Node, line_index: &LineIndex) -> Vec<DocumentS
             }
             Statement::Call(call) => {
                 if let Some(block) = &call.block {
+                    let name = if call.args.is_empty() {
+                        format!("{}()", call.function.name)
+                    } else if let Some(string) =
+                        call.only_arg().and_then(|arg| arg.as_primary_string())
+                    {
+                        format!("{}(\"{}\")", call.function.name, string.raw_value)
+                    } else {
+                        format!("{}(...)", call.function.name)
+                    };
                     symbols.push(DocumentSymbol {
-                        name: call.function.name.to_string(),
+                        name,
                         detail: None,
                         kind: SymbolKind::FUNCTION,
                         tags: None,
