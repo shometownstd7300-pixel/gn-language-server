@@ -25,10 +25,13 @@ use pest::Span;
 
 use crate::{
     analyzer::{
-        cache::AnalysisNode, diagnostics::collect_diagnostics, links::collect_links,
-        shallow::ShallowAnalyzer, symbols::collect_symbols, AnalyzedAssignment, AnalyzedBlock,
-        AnalyzedEvent, AnalyzedFile, AnalyzedImport, AnalyzedLink, AnalyzedTarget,
-        AnalyzedTemplate, WorkspaceContext,
+        cache::AnalysisNode,
+        diagnostics::collect_diagnostics,
+        links::collect_links,
+        shallow::ShallowAnalyzer,
+        symbols::collect_symbols,
+        AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedImport,
+        AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
     },
     common::{
         builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
@@ -160,199 +163,179 @@ impl FullAnalyzer {
         document: &'i Document,
         deps: &mut Vec<Arc<AnalysisNode>>,
     ) -> AnalyzedBlock<'i, 'p> {
-        let events: Vec<AnalyzedEvent> = block
-            .statements
-            .iter()
-            .flat_map(|statement| -> Vec<AnalyzedEvent> {
-                match statement {
-                    Statement::Assignment(assignment) => {
-                        let mut events = Vec::new();
-                        let identifier = match &assignment.lvalue {
-                            LValue::Identifier(identifier) => identifier,
-                            LValue::ArrayAccess(array_access) => &array_access.array,
-                            LValue::ScopeAccess(scope_access) => &scope_access.scope,
-                        };
-                        events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
-                            name: identifier.name,
-                            comments: assignment.comments.clone(),
-                            statement,
-                            document,
-                            variable_span: identifier.span,
-                        }));
+        let mut events: Vec<AnalyzedEvent> = Vec::new();
+
+        for statement in &block.statements {
+            match statement {
+                Statement::Assignment(assignment) => {
+                    let identifier = match &assignment.lvalue {
+                        LValue::Identifier(identifier) => identifier,
+                        LValue::ArrayAccess(array_access) => &array_access.array,
+                        LValue::ScopeAccess(scope_access) => &scope_access.scope,
+                    };
+                    events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
+                        name: identifier.name,
+                        comments: assignment.comments.clone(),
+                        statement,
+                        document,
+                        variable_span: identifier.span,
+                    }));
+                    events.extend(self.analyze_expr(
+                        &assignment.rvalue,
+                        request_time,
+                        document,
+                        deps,
+                    ));
+                }
+                Statement::Call(call) => match call.function.name {
+                    IMPORT => {
+                        if let Some(name) = call
+                            .only_arg()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            let path = self
+                                .context
+                                .resolve_path(name, document.path.parent().unwrap());
+                            let file = self.shallow_analyzer.analyze(&path, request_time);
+                            deps.push(file.node.clone());
+                            events.push(AnalyzedEvent::Import(AnalyzedImport {
+                                file,
+                                span: call.span(),
+                            }));
+                        }
+                    }
+                    TEMPLATE => {
+                        if let Some(name) = call
+                            .only_arg()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            events.push(AnalyzedEvent::Template(AnalyzedTemplate {
+                                name,
+                                comments: call.comments.clone(),
+                                document,
+                                header: call.function.span,
+                                span: call.span,
+                            }));
+                        }
+                        if let Some(block) = &call.block {
+                            events.push(AnalyzedEvent::NewScope(self.analyze_block(
+                                block,
+                                request_time,
+                                document,
+                                deps,
+                            )));
+                        }
+                    }
+                    DECLARE_ARGS => {
+                        if let Some(block) = &call.block {
+                            let analyzed_root =
+                                self.analyze_block(block, request_time, document, deps);
+                            events.push(AnalyzedEvent::DeclareArgs(analyzed_root));
+                        }
+                    }
+                    FOREACH => {
+                        if let Some(block) = &call.block {
+                            events.extend(
+                                self.analyze_block(block, request_time, document, deps)
+                                    .events,
+                            );
+                        }
+                    }
+                    SET_DEFAULTS => {
+                        if let Some(block) = &call.block {
+                            let analyzed_root =
+                                self.analyze_block(block, request_time, document, deps);
+                            events.push(AnalyzedEvent::NewScope(analyzed_root));
+                        }
+                    }
+                    FORWARD_VARIABLES_FROM => {
+                        if let Some(strings) = call
+                            .args
+                            .get(1)
+                            .and_then(|expr| expr.as_primary_list())
+                            .map(|list| {
+                                list.values
+                                    .iter()
+                                    .filter_map(|expr| expr.as_primary_string())
+                                    .collect::<Vec<_>>()
+                            })
+                        {
+                            events.extend(strings.into_iter().filter_map(|string| {
+                                parse_simple_literal(string.raw_value).map(|name| {
+                                    AnalyzedEvent::Assignment(AnalyzedAssignment {
+                                        name,
+                                        comments: Comments::default(),
+                                        statement,
+                                        document,
+                                        variable_span: string.span,
+                                    })
+                                })
+                            }));
+                        }
+                    }
+                    _ => {
+                        if let Some(name) = call
+                            .only_arg()
+                            .and_then(|expr| expr.as_primary_string())
+                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        {
+                            events.push(AnalyzedEvent::Target(AnalyzedTarget {
+                                name,
+                                call,
+                                document,
+                                header: call.args[0].span(),
+                                span: call.span,
+                            }));
+                        }
+                        if let Some(block) = &call.block {
+                            events.push(AnalyzedEvent::NewScope(self.analyze_block(
+                                block,
+                                request_time,
+                                document,
+                                deps,
+                            )));
+                        }
+                    }
+                },
+                Statement::Condition(condition) => {
+                    let mut condition_blocks = Vec::new();
+                    let mut current_condition = condition;
+                    loop {
                         events.extend(self.analyze_expr(
-                            &assignment.rvalue,
+                            &current_condition.condition,
                             request_time,
                             document,
                             deps,
                         ));
-                        events
-                    }
-                    Statement::Call(call) => match call.function.name {
-                        IMPORT => {
-                            if let Some(name) = call
-                                .only_arg()
-                                .and_then(|expr| expr.as_primary_string())
-                                .and_then(|s| parse_simple_literal(s.raw_value))
-                            {
-                                let path = self
-                                    .context
-                                    .resolve_path(name, document.path.parent().unwrap());
-                                let file = self.shallow_analyzer.analyze(&path, request_time);
-                                deps.push(file.node.clone());
-                                vec![AnalyzedEvent::Import(AnalyzedImport {
-                                    file,
-                                    span: call.span(),
-                                })]
-                            } else {
-                                Vec::new()
+                        condition_blocks.push(self.analyze_block(
+                            &current_condition.then_block,
+                            request_time,
+                            document,
+                            deps,
+                        ));
+                        match &current_condition.else_block {
+                            None => break,
+                            Some(Either::Left(next_condition)) => {
+                                current_condition = next_condition;
                             }
-                        }
-                        TEMPLATE => {
-                            let mut events = Vec::new();
-                            if let Some(name) = call
-                                .only_arg()
-                                .and_then(|expr| expr.as_primary_string())
-                                .and_then(|s| parse_simple_literal(s.raw_value))
-                            {
-                                events.push(AnalyzedEvent::Template(AnalyzedTemplate {
-                                    name,
-                                    comments: call.comments.clone(),
-                                    document,
-                                    header: call.function.span,
-                                    span: call.span,
-                                }));
-                            }
-                            if let Some(block) = &call.block {
-                                events.push(AnalyzedEvent::NewScope(self.analyze_block(
+                            Some(Either::Right(block)) => {
+                                condition_blocks.push(self.analyze_block(
                                     block,
                                     request_time,
                                     document,
                                     deps,
-                                )));
-                            }
-                            events
-                        }
-                        DECLARE_ARGS => {
-                            if let Some(block) = &call.block {
-                                let analyzed_root =
-                                    self.analyze_block(block, request_time, document, deps);
-                                vec![AnalyzedEvent::DeclareArgs(analyzed_root)]
-                            } else {
-                                Vec::new()
+                                ));
+                                break;
                             }
                         }
-                        FOREACH => {
-                            if let Some(block) = &call.block {
-                                self.analyze_block(block, request_time, document, deps)
-                                    .events
-                            } else {
-                                Vec::new()
-                            }
-                        }
-                        SET_DEFAULTS => {
-                            if let Some(block) = &call.block {
-                                let analyzed_root =
-                                    self.analyze_block(block, request_time, document, deps);
-                                vec![AnalyzedEvent::NewScope(analyzed_root)]
-                            } else {
-                                Vec::new()
-                            }
-                        }
-                        FORWARD_VARIABLES_FROM => {
-                            if let Some(strings) = call
-                                .args
-                                .get(1)
-                                .and_then(|expr| expr.as_primary_list())
-                                .map(|list| {
-                                    list.values
-                                        .iter()
-                                        .filter_map(|expr| expr.as_primary_string())
-                                        .collect::<Vec<_>>()
-                                })
-                            {
-                                return strings
-                                    .into_iter()
-                                    .filter_map(|string| {
-                                        parse_simple_literal(string.raw_value).map(|name| {
-                                            AnalyzedEvent::Assignment(AnalyzedAssignment {
-                                                name,
-                                                comments: Comments::default(),
-                                                statement,
-                                                document,
-                                                variable_span: string.span,
-                                            })
-                                        })
-                                    })
-                                    .collect();
-                            }
-                            Vec::new()
-                        }
-                        _ => {
-                            let mut events = Vec::new();
-                            if let Some(name) = call
-                                .only_arg()
-                                .and_then(|expr| expr.as_primary_string())
-                                .and_then(|s| parse_simple_literal(s.raw_value))
-                            {
-                                events.push(AnalyzedEvent::Target(AnalyzedTarget {
-                                    name,
-                                    call,
-                                    document,
-                                    header: call.args[0].span(),
-                                    span: call.span,
-                                }));
-                            }
-                            if let Some(block) = &call.block {
-                                events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                    block,
-                                    request_time,
-                                    document,
-                                    deps,
-                                )));
-                            }
-                            events
-                        }
-                    },
-                    Statement::Condition(condition) => {
-                        let mut events = Vec::new();
-                        let mut condition_blocks = Vec::new();
-                        let mut current_condition = condition;
-                        loop {
-                            events.extend(self.analyze_expr(
-                                &current_condition.condition,
-                                request_time,
-                                document,
-                                deps,
-                            ));
-                            condition_blocks.push(self.analyze_block(
-                                &current_condition.then_block,
-                                request_time,
-                                document,
-                                deps,
-                            ));
-                            match &current_condition.else_block {
-                                None => break,
-                                Some(Either::Left(next_condition)) => {
-                                    current_condition = next_condition;
-                                }
-                                Some(Either::Right(block)) => {
-                                    condition_blocks.push(self.analyze_block(
-                                        block,
-                                        request_time,
-                                        document,
-                                        deps,
-                                    ));
-                                    break;
-                                }
-                            }
-                        }
-                        events.push(AnalyzedEvent::Conditions(condition_blocks));
-                        events
                     }
-                    Statement::Error(_) => Vec::new(),
+                    events.push(AnalyzedEvent::Conditions(condition_blocks));
                 }
-            })
-            .collect();
+                Statement::Error(_) => {}
+            }
+        }
 
         AnalyzedBlock {
             events,
