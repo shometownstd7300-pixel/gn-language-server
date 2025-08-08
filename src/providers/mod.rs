@@ -34,6 +34,7 @@ pub mod goto_definition;
 pub mod hover;
 pub mod indexing;
 pub mod references;
+pub mod workspace_symbol;
 
 pub fn get_text_document_path(text_document: &TextDocumentIdentifier) -> Result<PathBuf> {
     text_document

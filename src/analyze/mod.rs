@@ -82,6 +82,10 @@ impl Analyzer {
         workspace.analyzer.get_shallow().cached_files()
     }
 
+    pub fn workspace_roots(&self) -> Vec<PathBuf> {
+        self.workspaces.read().unwrap().keys().cloned().collect()
+    }
+
     fn workspace_for(&self, path: &Path) -> Result<Arc<WorkspaceAnalyzer>> {
         let workspace_root = find_nearest_workspace_root(path)?;
         let dot_gn_path = workspace_root.join(".gn");

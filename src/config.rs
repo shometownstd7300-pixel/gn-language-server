@@ -44,4 +44,5 @@ impl Default for Configurations {
 #[serde(rename_all = "camelCase")]
 pub struct ExperimentalConfigurations {
     pub parallel_indexing: bool,
+    pub workspace_symbols: bool,
 }

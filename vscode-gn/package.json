@@ -83,6 +83,11 @@
           "default": false,
           "description": "Enables parallel indexing (experimental)."
         },
+        "gn.experimental.workspaceSymbols": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enables workspace symbols (experimental)."
+        },
         "gn.trace.server": {
           "type": "string",
           "enum": [

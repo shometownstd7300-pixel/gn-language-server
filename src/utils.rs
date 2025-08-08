@@ -47,7 +47,10 @@ pub fn walk_source_dirs(root: &Path) -> impl Iterator<Item = PathBuf> {
 }
 
 pub fn find_gn_files(root: &Path) -> impl Iterator<Item = PathBuf> {
-    walk_source_dirs(root).filter(|path| path.ends_with(".gn") || path.ends_with(".gni"))
+    walk_source_dirs(root).filter(|path| {
+        path.to_str()
+            .is_some_and(|name| name.ends_with(".gn") || name.ends_with(".gni"))
+    })
 }
 
 #[derive(Clone)]
