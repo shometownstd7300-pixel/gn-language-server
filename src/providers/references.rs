@@ -19,7 +19,7 @@ use crate::{
     error::{Error, Result},
     providers::{get_text_document_path, lookup_target_name_string_at},
     server::RequestContext,
-    utils::find_workspace_root,
+    utils::find_nearest_workspace_root,
 };
 
 fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Vec<&'i str> {
@@ -37,7 +37,7 @@ async fn target_references(
     let bad_prefixes = get_overlapping_targets(&current_file.analyzed_root, target_name);
 
     // Wait for the workspace indexing to finish.
-    let workspace_root = find_workspace_root(&current_file.document.path)?;
+    let workspace_root = find_nearest_workspace_root(&current_file.document.path)?;
     let Some(indexed) = context.indexed.lock().unwrap().get(workspace_root).cloned() else {
         return Err(Error::General(format!(
             "Indexing for {} not started",

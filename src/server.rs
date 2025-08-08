@@ -14,8 +14,8 @@
 
 use std::{
     collections::{btree_map::Entry, BTreeMap},
-    path::PathBuf,
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
     time::Instant,
 };
 
@@ -28,7 +28,7 @@ use tower_lsp::{
         DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
         Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
         InitializedParams, Location, MessageType, OneOf, ReferenceParams, ServerCapabilities,
-        TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
     },
     LanguageServer, LspService, Server,
 };
@@ -38,13 +38,13 @@ use crate::{
     client::TestableClient,
     error::RpcResult,
     storage::DocumentStorage,
-    utils::{find_workspace_root, AsyncSignal},
+    utils::{find_nearest_workspace_root, walk_source_dirs, AsyncSignal},
 };
 
-#[derive(Clone)]
 struct ServerContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Analyzer>,
+    pub initialize_params: Arc<OnceLock<InitializeParams>>,
     pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
 }
@@ -57,6 +57,7 @@ impl ServerContext {
         Self {
             storage,
             analyzer,
+            initialize_params: Default::default(),
             indexed: Default::default(),
             client: TestableClient::new_for_testing(),
         }
@@ -66,6 +67,7 @@ impl ServerContext {
         RequestContext {
             storage: self.storage.clone(),
             analyzer: self.analyzer.clone(),
+            initialize_params: self.initialize_params.clone(),
             indexed: self.indexed.clone(),
             client: self.client.clone(),
             request_time: Instant::now(),
@@ -77,6 +79,7 @@ impl ServerContext {
 pub struct RequestContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Analyzer>,
+    pub initialize_params: Arc<OnceLock<InitializeParams>>,
     pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
     pub request_time: Instant,
@@ -103,16 +106,46 @@ impl Backend {
             context: ServerContext {
                 storage: storage.clone(),
                 analyzer: analyzer.clone(),
+                initialize_params: Default::default(),
                 indexed: Default::default(),
                 client,
             },
         }
     }
+
+    async fn maybe_index_workspace_for(
+        &self,
+        context: &RequestContext,
+        path: &Path,
+        parallel_indexing: bool,
+    ) {
+        let Ok(workspace_root) = find_nearest_workspace_root(path) else {
+            return;
+        };
+        let workspace_root = workspace_root.to_path_buf();
+
+        let mut indexed = match context
+            .indexed
+            .lock()
+            .unwrap()
+            .entry(workspace_root.to_path_buf())
+        {
+            Entry::Occupied(_) => return,
+            Entry::Vacant(entry) => entry.insert(AsyncSignal::new()).clone(),
+        };
+
+        let context = context.clone();
+        spawn(async move {
+            crate::providers::indexing::index(&context, &workspace_root, parallel_indexing).await;
+            indexed.set();
+        });
+    }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> RpcResult<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> RpcResult<InitializeResult> {
+        self.context.initialize_params.set(params).unwrap();
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -135,10 +168,38 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _params: InitializedParams) {
-        self.context
+        let context = self.context.request();
+        context
             .client
             .log_message(MessageType::INFO, "GN language server initialized")
             .await;
+
+        let configurations = self.context.client.configurations().await;
+        if !configurations.background_indexing {
+            return;
+        }
+
+        let initialize_params = context.initialize_params.get().unwrap();
+        if let Some(root_uri) = &initialize_params.root_uri {
+            if let Ok(root_path) = root_uri.to_file_path() {
+                self.maybe_index_workspace_for(
+                    &context,
+                    &root_path,
+                    configurations.experimental.parallel_indexing,
+                )
+                .await;
+                for workspace_root in
+                    walk_source_dirs(&root_path).filter(|path| path.join(".gn").exists())
+                {
+                    self.maybe_index_workspace_for(
+                        &context,
+                        &workspace_root,
+                        configurations.experimental.parallel_indexing,
+                    )
+                    .await;
+                }
+            }
+        }
     }
 
     async fn shutdown(&self) -> RpcResult<()> {
@@ -147,37 +208,19 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let context = self.context.request();
+        let Ok(path) = Url::to_file_path(&params.text_document.uri) else {
+            return;
+        };
         let configurations = self.context.client.configurations().await;
         if configurations.background_indexing {
-            if let Ok(path) = params.text_document.uri.to_file_path() {
-                if let Ok(workspace_root) = find_workspace_root(&path) {
-                    let workspace_root = workspace_root.to_path_buf();
-                    let maybe_indexed = match self
-                        .context
-                        .indexed
-                        .lock()
-                        .unwrap()
-                        .entry(workspace_root.clone())
-                    {
-                        Entry::Occupied(_) => None,
-                        Entry::Vacant(entry) => Some(entry.insert(AsyncSignal::new()).clone()),
-                    };
-                    if let Some(mut indexed) = maybe_indexed {
-                        let context = context.clone();
-                        spawn(async move {
-                            crate::providers::indexing::index(
-                                &context,
-                                &workspace_root,
-                                configurations.experimental.parallel_indexing,
-                            )
-                            .await;
-                            indexed.set();
-                        });
-                    }
-                }
-            };
+            self.maybe_index_workspace_for(
+                &context,
+                &path,
+                configurations.experimental.parallel_indexing,
+            )
+            .await;
         }
-        crate::providers::document::did_open(&context, params).await;
+        crate::providers::document::did_open(&self.context.request(), params).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {

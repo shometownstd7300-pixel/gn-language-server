@@ -24,7 +24,7 @@ use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
 
-pub fn find_workspace_root(path: &Path) -> Result<&Path> {
+pub fn find_nearest_workspace_root(path: &Path) -> Result<&Path> {
     for dir in path.ancestors().skip(1) {
         if dir.join(".gn").try_exists()? {
             return Ok(dir);
@@ -36,20 +36,18 @@ pub fn find_workspace_root(path: &Path) -> Result<&Path> {
     )))
 }
 
-pub fn find_gn_files(root: &Path) -> impl Iterator<Item = PathBuf> {
+pub fn walk_source_dirs(root: &Path) -> impl Iterator<Item = PathBuf> {
     WalkDir::new(root)
         .into_iter()
         .filter_entry(|entry| {
             !(entry.file_type().is_dir() && entry.path().join("args.gn").exists())
         })
         .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.ends_with(".gn") || name.ends_with(".gni"))
-        })
         .map(|entry| entry.into_path())
+}
+
+pub fn find_gn_files(root: &Path) -> impl Iterator<Item = PathBuf> {
+    walk_source_dirs(root).filter(|path| path.ends_with(".gn") || path.ends_with(".gni"))
 }
 
 #[derive(Clone)]

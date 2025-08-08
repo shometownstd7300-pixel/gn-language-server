@@ -29,7 +29,7 @@ use crate::{
     analyze::{data::WorkspaceContext, dotgn::evaluate_dot_gn, full::FullAnalyzer},
     error::{Error, Result},
     storage::DocumentStorage,
-    utils::find_workspace_root,
+    utils::find_nearest_workspace_root,
 };
 
 mod cache;
@@ -83,7 +83,7 @@ impl Analyzer {
     }
 
     fn workspace_for(&self, path: &Path) -> Result<Arc<WorkspaceAnalyzer>> {
-        let workspace_root = find_workspace_root(path)?;
+        let workspace_root = find_nearest_workspace_root(path)?;
         let dot_gn_path = workspace_root.join(".gn");
         let dot_gn_version = {
             let storage = self.storage.lock().unwrap();

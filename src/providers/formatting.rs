@@ -26,7 +26,7 @@ use crate::{
     error::{Error, Result},
     providers::get_text_document_path,
     server::RequestContext,
-    utils::find_workspace_root,
+    utils::find_nearest_workspace_root,
 };
 
 pub async fn formatting(
@@ -45,7 +45,7 @@ pub async fn formatting(
                 gn_path.display()
             )));
         }
-    } else if let Some(gn_path) = find_gn_binary(find_workspace_root(&file_path).ok()) {
+    } else if let Some(gn_path) = find_gn_binary(find_nearest_workspace_root(&file_path).ok()) {
         gn_path
     } else {
         return Err(Error::General(
