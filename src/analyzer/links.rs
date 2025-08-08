@@ -15,9 +15,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    analyze::{data::AnalyzedLink, WorkspaceContext},
-    ast::{Block, Node},
-    utils::parse_simple_literal,
+    analyzer::{data::AnalyzedLink, WorkspaceContext},
+    common::utils::parse_simple_literal,
+    parser::{Block, Node},
 };
 
 #[allow(clippy::manual_map)]

@@ -20,7 +20,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::utils::LineIndex;
+use crate::common::utils::LineIndex;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DocumentVersion {

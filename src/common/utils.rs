@@ -22,7 +22,7 @@ use tokio::sync::SetOnce;
 use tower_lsp::lsp_types::{Position, Range};
 use walkdir::WalkDir;
 
-use crate::error::{Error, Result};
+use crate::common::error::{Error, Result};
 
 pub fn find_nearest_workspace_root(path: &Path) -> Result<&Path> {
     for dir in path.ancestors().skip(1) {

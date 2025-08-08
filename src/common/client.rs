@@ -17,7 +17,7 @@ use std::fmt::Display;
 use itertools::Itertools;
 use tower_lsp::lsp_types::{ConfigurationItem, Diagnostic, MessageType, Url};
 
-use crate::config::Configurations;
+use crate::common::config::Configurations;
 
 #[derive(Clone)]
 pub struct TestableClient {

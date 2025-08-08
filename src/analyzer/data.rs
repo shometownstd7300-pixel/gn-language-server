@@ -24,9 +24,9 @@ use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
-    analyze::{cache::AnalysisNode, utils::resolve_path},
-    ast::{parse, Block, Call, Comments, Node, Statement},
-    storage::{Document, DocumentVersion},
+    analyzer::{cache::AnalysisNode, utils::resolve_path},
+    common::storage::{Document, DocumentVersion},
+    parser::{parse, Block, Call, Comments, Node, Statement},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

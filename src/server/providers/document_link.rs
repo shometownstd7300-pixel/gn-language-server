@@ -17,10 +17,12 @@ use std::path::PathBuf;
 use tower_lsp::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 
 use crate::{
-    analyze::AnalyzedLink,
-    error::{Error, Result},
-    providers::utils::{find_target, get_text_document_path},
-    server::RequestContext,
+    analyzer::AnalyzedLink,
+    common::error::{Error, Result},
+    server::{
+        providers::utils::{find_target, get_text_document_path},
+        RequestContext,
+    },
 };
 
 #[derive(serde::Serialize, serde::Deserialize)]

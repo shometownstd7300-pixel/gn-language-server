@@ -19,10 +19,10 @@ use pest::{
     Parser,
 };
 
-use crate::ast::*;
+use crate::parser::*;
 
 #[derive(pest_derive::Parser)]
-#[grammar = "ast/gn.pest"]
+#[grammar = "parser/gn.pest"]
 struct GnParser;
 
 fn rule_to_binary_op(rule: Rule) -> BinaryOp {

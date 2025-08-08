@@ -14,7 +14,7 @@
 
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Url};
 
-use crate::{ast::Node, server::RequestContext, storage::DocumentVersion};
+use crate::{common::storage::DocumentVersion, parser::Node, server::RequestContext};
 
 pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
     let Ok(path) = uri.to_file_path() else {

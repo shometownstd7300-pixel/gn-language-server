@@ -21,11 +21,9 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
-    ast::{Block, Node, Statement},
-    builtins::BUILTINS,
-    error::Result,
-    providers::utils::get_text_document_path,
-    server::RequestContext,
+    common::{builtins::BUILTINS, error::Result},
+    parser::{Block, Node, Statement},
+    server::{providers::utils::get_text_document_path, RequestContext},
 };
 
 fn is_after_dot(data: &str, offset: usize) -> bool {

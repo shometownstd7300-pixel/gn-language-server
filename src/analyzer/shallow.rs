@@ -23,7 +23,7 @@ use std::{
 use either::Either;
 
 use crate::{
-    analyze::{
+    analyzer::{
         cache::AnalysisNode,
         data::{
             AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable,
@@ -33,10 +33,12 @@ use crate::{
         links::collect_links,
         AnalyzedLink,
     },
-    ast::{parse, Block, Comments, LValue, Node, Statement},
-    builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
-    storage::{Document, DocumentStorage},
-    utils::parse_simple_literal,
+    common::{
+        builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
+        storage::{Document, DocumentStorage},
+        utils::parse_simple_literal,
+    },
+    parser::{parse, Block, Comments, LValue, Node, Statement},
 };
 
 fn is_exported(name: &str) -> bool {

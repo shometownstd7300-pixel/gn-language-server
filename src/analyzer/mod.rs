@@ -26,10 +26,12 @@ pub use data::{
 };
 
 use crate::{
-    analyze::{data::WorkspaceContext, dotgn::evaluate_dot_gn, full::FullAnalyzer},
-    error::{Error, Result},
-    storage::DocumentStorage,
-    utils::find_nearest_workspace_root,
+    analyzer::{data::WorkspaceContext, dotgn::evaluate_dot_gn, full::FullAnalyzer},
+    common::{
+        error::{Error, Result},
+        storage::DocumentStorage,
+        utils::find_nearest_workspace_root,
+    },
 };
 
 mod cache;

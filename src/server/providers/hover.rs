@@ -18,11 +18,12 @@ use itertools::Itertools;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkedString, Url};
 
 use crate::{
-    ast::{Node, Statement},
-    builtins::BUILTINS,
-    error::Result,
-    providers::utils::{get_text_document_path, lookup_identifier_at},
-    server::RequestContext,
+    common::{builtins::BUILTINS, error::Result},
+    parser::{Node, Statement},
+    server::{
+        providers::utils::{get_text_document_path, lookup_identifier_at},
+        RequestContext,
+    },
 };
 
 fn format_path(path: &Path, workspace_root: &Path) -> String {
@@ -171,7 +172,7 @@ mod tests {
         Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
     };
 
-    use crate::testutils::testdata;
+    use crate::common::testutils::testdata;
 
     use super::*;
 

@@ -12,18 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tower_lsp::lsp_types::{DocumentSymbolParams, DocumentSymbolResponse};
-
-use crate::{error::Result, providers::utils::get_text_document_path, server::RequestContext};
-
-pub async fn document_symbol(
-    context: &RequestContext,
-    params: DocumentSymbolParams,
-) -> Result<Option<DocumentSymbolResponse>> {
-    let path = get_text_document_path(&params.text_document)?;
-    let current_file = context.analyzer.analyze(&path, context.request_time)?;
-
-    Ok(Some(DocumentSymbolResponse::Nested(
-        current_file.symbols.clone(),
-    )))
-}
+pub mod binary;
+pub mod builtins;
+pub mod client;
+pub mod config;
+pub mod error;
+pub mod storage;
+pub mod testutils;
+pub mod utils;

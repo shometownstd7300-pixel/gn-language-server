@@ -15,7 +15,7 @@
 use either::Either;
 use pest::Span;
 
-mod parser;
+mod parse;
 mod tests;
 
 pub trait Node<'i> {
@@ -822,5 +822,5 @@ impl std::fmt::Display for Comments<'_> {
 }
 
 pub fn parse(input: &str) -> Block {
-    parser::parse(input)
+    parse::parse(input)
 }

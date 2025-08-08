@@ -24,15 +24,17 @@ use either::Either;
 use pest::Span;
 
 use crate::{
-    analyze::{
+    analyzer::{
         cache::AnalysisNode, links::collect_links, shallow::ShallowAnalyzer,
         symbols::collect_symbols, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
         AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
     },
-    ast::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
-    builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
-    storage::{Document, DocumentStorage},
-    utils::parse_simple_literal,
+    common::{
+        builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
+        storage::{Document, DocumentStorage},
+        utils::parse_simple_literal,
+    },
+    parser::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
 };
 
 pub struct FullAnalyzer {

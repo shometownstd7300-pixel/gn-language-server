@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::Path;
+use tower_lsp::lsp_types::{DocumentSymbolParams, DocumentSymbolResponse};
 
-use crate::bench::run_bench;
+use crate::{
+    common::error::Result,
+    server::{providers::utils::get_text_document_path, RequestContext},
+};
 
-mod analyzer;
-mod bench;
-mod common;
-mod parser;
-mod server;
+pub async fn document_symbol(
+    context: &RequestContext,
+    params: DocumentSymbolParams,
+) -> Result<Option<DocumentSymbolResponse>> {
+    let path = get_text_document_path(&params.text_document)?;
+    let current_file = context.analyzer.analyze(&path, context.request_time)?;
 
-#[tokio::main]
-async fn main() {
-    if let Ok(path) = std::env::var("GN_BENCH") {
-        run_bench(Path::new(&path)).await;
-        return;
-    }
-    server::run().await;
+    Ok(Some(DocumentSymbolResponse::Nested(
+        current_file.symbols.clone(),
+    )))
 }

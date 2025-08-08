@@ -16,8 +16,8 @@ use either::Either;
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::{
-    ast::{Node, Statement},
-    utils::LineIndex,
+    common::utils::LineIndex,
+    parser::{Node, Statement},
 };
 
 #[allow(deprecated)]

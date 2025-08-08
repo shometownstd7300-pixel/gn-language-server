@@ -18,9 +18,9 @@ use itertools::Itertools;
 use tower_lsp::lsp_types::{Position, TextDocumentIdentifier};
 
 use crate::{
-    analyze::{AnalyzedFile, AnalyzedTarget, ShallowAnalyzedFile},
-    ast::{Identifier, Node},
-    error::{Error, Result},
+    analyzer::{AnalyzedFile, AnalyzedTarget, ShallowAnalyzedFile},
+    common::error::{Error, Result},
+    parser::{Identifier, Node},
 };
 
 pub fn get_text_document_path(text_document: &TextDocumentIdentifier) -> Result<PathBuf> {

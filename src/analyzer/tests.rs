@@ -19,7 +19,11 @@ use std::{
     time::Instant,
 };
 
-use crate::{analyze::Analyzer, ast::Statement, storage::DocumentStorage, testutils::testdata};
+use crate::{
+    analyzer::Analyzer,
+    common::{storage::DocumentStorage, testutils::testdata},
+    parser::Statement,
+};
 
 #[test]
 fn test_analyze_smoke() {

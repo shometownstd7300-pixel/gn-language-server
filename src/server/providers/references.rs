@@ -15,11 +15,15 @@
 use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
 
 use crate::{
-    analyze::{AnalyzedBlock, AnalyzedFile, AnalyzedLink},
-    error::{Error, Result},
-    providers::utils::{get_text_document_path, lookup_target_name_string_at},
-    server::RequestContext,
-    utils::find_nearest_workspace_root,
+    analyzer::{AnalyzedBlock, AnalyzedFile, AnalyzedLink},
+    common::{
+        error::{Error, Result},
+        utils::find_nearest_workspace_root,
+    },
+    server::{
+        providers::utils::{get_text_document_path, lookup_target_name_string_at},
+        RequestContext,
+    },
 };
 
 fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Vec<&'i str> {

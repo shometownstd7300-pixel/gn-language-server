@@ -20,7 +20,10 @@ use std::{
 
 use futures::future::join_all;
 
-use crate::{analyze::Analyzer, storage::DocumentStorage, utils::find_gn_files};
+use crate::{
+    analyzer::Analyzer,
+    common::{storage::DocumentStorage, utils::find_gn_files},
+};
 
 pub async fn run_bench(workspace_root: &Path) {
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));

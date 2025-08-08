@@ -16,7 +16,9 @@ use std::collections::HashSet;
 
 use tower_lsp::lsp_types::{Location, SymbolInformation, SymbolKind, Url, WorkspaceSymbolParams};
 
-use crate::{analyze::ShallowAnalyzedFile, ast::Node, error::Result, server::RequestContext};
+use crate::{
+    analyzer::ShallowAnalyzedFile, common::error::Result, parser::Node, server::RequestContext,
+};
 
 pub async fn workspace_symbol(
     context: &RequestContext,

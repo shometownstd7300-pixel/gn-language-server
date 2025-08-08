@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::storage::{DocumentStorage, DocumentVersion};
+use crate::common::storage::{DocumentStorage, DocumentVersion};
 
 const VERIFY_INTERVAL: Duration = Duration::from_secs(5);
 

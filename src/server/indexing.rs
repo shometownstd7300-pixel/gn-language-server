@@ -17,7 +17,7 @@ use std::{path::Path, time::Instant};
 use futures::{future::join_all, FutureExt};
 use tower_lsp::lsp_types::MessageType;
 
-use crate::{server::RequestContext, utils::find_gn_files};
+use crate::{common::utils::find_gn_files, server::RequestContext};
 
 pub async fn index(context: &RequestContext, workspace_root: &Path, parallel: bool) {
     context

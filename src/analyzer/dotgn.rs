@@ -15,10 +15,12 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    analyze::utils::resolve_path,
-    ast::{parse, AssignOp, LValue, Statement},
-    error::{Error, Result},
-    utils::{parse_simple_literal, LineIndex},
+    analyzer::utils::resolve_path,
+    common::{
+        error::{Error, Result},
+        utils::{parse_simple_literal, LineIndex},
+    },
+    parser::{parse, AssignOp, LValue, Statement},
 };
 
 pub fn evaluate_dot_gn(workspace_root: &Path, input: &str) -> Result<PathBuf> {

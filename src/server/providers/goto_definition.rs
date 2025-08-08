@@ -17,13 +17,15 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
-    analyze::AnalyzedLink,
-    ast::Node,
-    error::Result,
-    providers::utils::{
-        find_target, get_text_document_path, lookup_identifier_at, lookup_target_name_string_at,
+    analyzer::AnalyzedLink,
+    common::error::Result,
+    parser::Node,
+    server::{
+        providers::utils::{
+            find_target, get_text_document_path, lookup_identifier_at, lookup_target_name_string_at,
+        },
+        RequestContext,
     },
-    server::RequestContext,
 };
 
 pub async fn goto_definition(
