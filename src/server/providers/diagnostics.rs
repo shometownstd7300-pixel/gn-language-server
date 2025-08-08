@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Url};
+use tower_lsp::lsp_types::Url;
 
-use crate::{common::storage::DocumentVersion, parser::Node, server::RequestContext};
+use crate::{common::storage::DocumentVersion, server::RequestContext};
 
 pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
     let Ok(path) = uri.to_file_path() else {
@@ -36,20 +36,9 @@ pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
         None
     };
 
-    let diags = current_file
-        .ast_root
-        .errors()
-        .map(|error| Diagnostic {
-            range: current_file.document.line_index.range(error.span()),
-            severity: Some(DiagnosticSeverity::ERROR),
-            message: error.diagnosis().to_string(),
-            ..Default::default()
-        })
-        .collect();
-
     context
         .client
-        .publish_diagnostics(uri.clone(), diags, version)
+        .publish_diagnostics(uri.clone(), current_file.diagnostics.clone(), version)
         .await;
 }
 

@@ -36,6 +36,7 @@ use crate::{
 
 mod cache;
 mod data;
+mod diagnostics;
 mod dotgn;
 mod full;
 mod links;

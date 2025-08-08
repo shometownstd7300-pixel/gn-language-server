@@ -21,7 +21,7 @@ use std::{
 };
 
 use pest::Span;
-use tower_lsp::lsp_types::DocumentSymbol;
+use tower_lsp::lsp_types::{Diagnostic, DocumentSymbol};
 
 use crate::{
     analyzer::{cache::AnalysisNode, utils::resolve_path},
@@ -243,6 +243,7 @@ pub struct AnalyzedFile {
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub symbols: Vec<DocumentSymbol>,
+    pub diagnostics: Vec<Diagnostic>,
     pub node: Arc<AnalysisNode>,
 }
 
@@ -255,6 +256,7 @@ impl AnalyzedFile {
         analyzed_root: AnalyzedBlock<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
         symbols: Vec<DocumentSymbol>,
+        diagnostics: Vec<Diagnostic>,
         deps: Vec<Arc<AnalysisNode>>,
         request_time: Instant,
     ) -> Pin<Arc<Self>> {
@@ -272,6 +274,7 @@ impl AnalyzedFile {
             analyzed_root,
             links,
             symbols,
+            diagnostics,
             node,
         })
     }

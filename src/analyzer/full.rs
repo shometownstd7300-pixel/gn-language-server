@@ -25,9 +25,10 @@ use pest::Span;
 
 use crate::{
     analyzer::{
-        cache::AnalysisNode, links::collect_links, shallow::ShallowAnalyzer,
-        symbols::collect_symbols, AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile,
-        AnalyzedImport, AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
+        cache::AnalysisNode, diagnostics::collect_diagnostics, links::collect_links,
+        shallow::ShallowAnalyzer, symbols::collect_symbols, AnalyzedAssignment, AnalyzedBlock,
+        AnalyzedEvent, AnalyzedFile, AnalyzedImport, AnalyzedLink, AnalyzedTarget,
+        AnalyzedTemplate, WorkspaceContext,
     },
     common::{
         builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
@@ -129,6 +130,7 @@ impl FullAnalyzer {
 
         let links = collect_links(&ast_root, path, &self.context);
         let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
+        let diagnostics = collect_diagnostics(&document, &ast_root);
 
         // SAFETY: links' contents are backed by pinned document.
         let links = unsafe { std::mem::transmute::<Vec<AnalyzedLink>, Vec<AnalyzedLink>>(links) };
@@ -145,6 +147,7 @@ impl FullAnalyzer {
             analyzed_root,
             links,
             symbols,
+            diagnostics,
             deps,
             request_time,
         )
