@@ -25,7 +25,7 @@ use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
     analyze::{cache::AnalysisNode, utils::resolve_path},
-    ast::{parse, Block, Call, Comments, Statement},
+    ast::{parse, Block, Call, Comments, Node, Statement},
     storage::{Document, DocumentVersion},
 };
 
@@ -308,20 +308,33 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         parent: Option<Arc<AnalyzedVariableEnv<'i, 'p>>>,
     ) -> AnalyzedVariableEnv<'i, 'p> {
         let mut variables = AnalyzedVariableEnv::new(parent);
+        let mut declare_args_stack: Vec<&AnalyzedBlock> = Vec::new();
 
         // First pass: Collect all variables in the scope.
         for event in self.top_level_events() {
             match event {
                 AnalyzedEvent::Assignment(assignment) => {
+                    while let Some(last_declare_args) = declare_args_stack.last() {
+                        if assignment.statement.span().end_pos() <= last_declare_args.span.end_pos()
+                        {
+                            break;
+                        }
+                        declare_args_stack.pop();
+                    }
                     variables.insert(
                         assignment.name,
                         AnalyzedVariable {
                             assignments: [(assignment.variable_span, assignment.clone())].into(),
+                            is_args: !declare_args_stack.is_empty(),
                         },
                     );
                 }
                 AnalyzedEvent::Import(import) => {
+                    // TODO: Handle import() within declare_args.
                     variables.import(&import.file.analyzed_root.variables);
+                }
+                AnalyzedEvent::DeclareArgs(block) => {
+                    declare_args_stack.push(block);
                 }
                 _ => {}
             }
@@ -399,25 +412,22 @@ impl<'i, 'p, 'a> Iterator for TopLevelEvents<'i, 'p, 'a> {
     type Item = &'a AnalyzedEvent<'i, 'p>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(event) = self.stack.pop() {
-            match event {
-                AnalyzedEvent::Conditions(blocks) => {
-                    self.stack
-                        .extend(blocks.iter().flat_map(|block| &block.events).rev());
-                }
-                AnalyzedEvent::DeclareArgs(block) => {
-                    self.stack.extend(block.events.iter().rev());
-                }
-                AnalyzedEvent::Import(_)
-                | AnalyzedEvent::Assignment(_)
-                | AnalyzedEvent::Template(_)
-                | AnalyzedEvent::Target(_)
-                | AnalyzedEvent::NewScope(_) => {
-                    return Some(event);
-                }
+        let event = self.stack.pop()?;
+        match event {
+            AnalyzedEvent::Conditions(blocks) => {
+                self.stack
+                    .extend(blocks.iter().flat_map(|block| &block.events).rev());
             }
+            AnalyzedEvent::DeclareArgs(block) => {
+                self.stack.extend(block.events.iter().rev());
+            }
+            AnalyzedEvent::Import(_)
+            | AnalyzedEvent::Assignment(_)
+            | AnalyzedEvent::Template(_)
+            | AnalyzedEvent::Target(_)
+            | AnalyzedEvent::NewScope(_) => {}
         }
-        None
+        Some(event)
     }
 }
 
@@ -448,6 +458,7 @@ pub struct AnalyzedAssignment<'i, 'p> {
 #[derive(Clone, Default)]
 pub struct AnalyzedVariable<'i, 'p> {
     pub assignments: HashMap<Span<'i>, AnalyzedAssignment<'i, 'p>>,
+    pub is_args: bool,
 }
 
 impl Merge for AnalyzedVariable<'_, '_> {

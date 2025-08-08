@@ -155,8 +155,14 @@ impl ShallowAnalyzer {
         let document = self.storage.lock().unwrap().read(path);
         let ast_root = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
-        let analyzed_root =
-            self.analyze_block(&ast_root, request_time, &document, &mut deps, visiting);
+        let analyzed_root = self.analyze_block(
+            &ast_root,
+            false,
+            request_time,
+            &document,
+            &mut deps,
+            visiting,
+        );
 
         let links = collect_links(&ast_root, path, &self.context);
 
@@ -175,6 +181,7 @@ impl ShallowAnalyzer {
     fn analyze_block<'i, 'p>(
         &self,
         block: &'p Block<'i>,
+        declare_args: bool,
         request_time: Instant,
         document: &'i Document,
         deps: &mut Vec<Arc<AnalysisNode>>,
@@ -205,6 +212,7 @@ impl ShallowAnalyzer {
                                     },
                                 )]
                                 .into(),
+                                is_args: declare_args,
                             },
                         );
                     }
@@ -248,6 +256,7 @@ impl ShallowAnalyzer {
                         if let Some(block) = &call.block {
                             analyzed_block.merge(&self.analyze_block(
                                 block,
+                                declare_args || call.function.name == DECLARE_ARGS,
                                 request_time,
                                 document,
                                 deps,
@@ -285,6 +294,7 @@ impl ShallowAnalyzer {
                                                     },
                                                 )]
                                                 .into(),
+                                                is_args: declare_args,
                                             },
                                         );
                                     }
@@ -316,6 +326,7 @@ impl ShallowAnalyzer {
                     loop {
                         analyzed_block.merge(&self.analyze_block(
                             &current_condition.then_block,
+                            declare_args,
                             request_time,
                             document,
                             deps,
@@ -329,6 +340,7 @@ impl ShallowAnalyzer {
                             Some(Either::Right(block)) => {
                                 analyzed_block.merge(&self.analyze_block(
                                     block,
+                                    declare_args,
                                     request_time,
                                     document,
                                     deps,
