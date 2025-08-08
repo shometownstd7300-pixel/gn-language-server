@@ -295,6 +295,13 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         TopLevelEvents::new(&self.events)
     }
 
+    pub fn targets(&self) -> impl Iterator<Item = &AnalyzedTarget<'i, 'p>> {
+        self.top_level_events().filter_map(|event| match event {
+            AnalyzedEvent::Target(target) => Some(target),
+            _ => None,
+        })
+    }
+
     pub fn variables_at(
         &self,
         pos: usize,

@@ -15,7 +15,7 @@
 use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
 
 use crate::{
-    analyze::{AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedLink},
+    analyze::{AnalyzedBlock, AnalyzedFile, AnalyzedLink},
     error::{Error, Result},
     providers::{get_text_document_path, lookup_target_name_string_at},
     server::RequestContext,
@@ -23,11 +23,8 @@ use crate::{
 };
 
 fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Vec<&'i str> {
-    root.top_level_events()
-        .filter_map(|event| match event {
-            AnalyzedEvent::Target(target) => Some(target.name),
-            _ => None,
-        })
+    root.targets()
+        .map(|target| target.name)
         .filter(|name| name.len() > prefix.len() && name.starts_with(prefix))
         .collect()
 }

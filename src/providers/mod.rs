@@ -18,7 +18,7 @@ use itertools::Itertools;
 use tower_lsp::lsp_types::{Position, TextDocumentIdentifier};
 
 use crate::{
-    analyze::{AnalyzedEvent, AnalyzedFile, AnalyzedTarget, ShallowAnalyzedFile},
+    analyze::{AnalyzedFile, AnalyzedTarget, ShallowAnalyzedFile},
     ast::{Identifier, Node},
     error::{Error, Result},
 };
@@ -55,11 +55,7 @@ pub fn lookup_target_name_string_at(
 ) -> Option<&AnalyzedTarget> {
     let offset = file.document.line_index.offset(position)?;
     file.analyzed_root
-        .top_level_events()
-        .filter_map(|event| match event {
-            AnalyzedEvent::Target(target) => Some(target),
-            _ => None,
-        })
+        .targets()
         .find(|target| target.header.start() < offset && offset < target.header.end())
 }
 
