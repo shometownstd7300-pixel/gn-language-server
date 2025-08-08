@@ -26,9 +26,9 @@ use crate::{
     analyzer::{
         cache::AnalysisNode,
         data::{
-            AnalyzedAssignment, AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable,
-            MutableShallowAnalyzedBlock, ShallowAnalyzedBlock, ShallowAnalyzedFile,
-            WorkspaceContext,
+            AnalyzedAssignment, AnalyzedTarget, AnalyzedTargetEnv, AnalyzedTemplate,
+            AnalyzedTemplateEnv, AnalyzedVariable, AnalyzedVariableEnv, ShallowAnalyzedBlock,
+            ShallowAnalyzedFile, WorkspaceContext,
         },
         links::collect_links,
         AnalyzedLink,
@@ -189,7 +189,9 @@ impl ShallowAnalyzer {
         deps: &mut Vec<Arc<AnalysisNode>>,
         visiting: &mut Vec<PathBuf>,
     ) -> ShallowAnalyzedBlock<'i, 'p> {
-        let mut analyzed_block = MutableShallowAnalyzedBlock::new_top_level();
+        let mut variables = AnalyzedVariableEnv::new(None);
+        let mut templates = AnalyzedTemplateEnv::new(None);
+        let mut targets = AnalyzedTargetEnv::new(None);
 
         for statement in &block.statements {
             match statement {
@@ -200,7 +202,7 @@ impl ShallowAnalyzer {
                         LValue::ScopeAccess(scope_access) => &scope_access.scope,
                     };
                     if is_exported(identifier.name) {
-                        analyzed_block.variables.insert(
+                        variables.insert(
                             identifier.name,
                             AnalyzedVariable {
                                 assignments: [(
@@ -230,7 +232,8 @@ impl ShallowAnalyzer {
                                 .context
                                 .resolve_path(name, document.path.parent().unwrap());
                             let file = self.analyze_cached(&path, request_time, visiting);
-                            analyzed_block.import(&file.analyzed_root);
+                            variables.import(&file.analyzed_root.variables);
+                            templates.import(&file.analyzed_root.templates);
                             deps.push(file.node.clone());
                         }
                     }
@@ -241,7 +244,7 @@ impl ShallowAnalyzer {
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
                             if is_exported(name) {
-                                analyzed_block.templates.insert(
+                                templates.insert(
                                     name,
                                     AnalyzedTemplate {
                                         name,
@@ -256,14 +259,17 @@ impl ShallowAnalyzer {
                     }
                     DECLARE_ARGS | FOREACH => {
                         if let Some(block) = &call.block {
-                            analyzed_block.merge(&self.analyze_block(
+                            let analyzed_block = &self.analyze_block(
                                 block,
                                 declare_args || call.function.name == DECLARE_ARGS,
                                 request_time,
                                 document,
                                 deps,
                                 visiting,
-                            ));
+                            );
+                            variables.merge(analyzed_block.variables.as_ref().clone());
+                            templates.merge(analyzed_block.templates.as_ref().clone());
+                            targets.merge(analyzed_block.targets.as_ref().clone());
                         }
                     }
                     SET_DEFAULTS => {}
@@ -282,7 +288,7 @@ impl ShallowAnalyzer {
                             for string in strings {
                                 if let Some(name) = parse_simple_literal(string.raw_value) {
                                     if is_exported(name) {
-                                        analyzed_block.variables.insert(
+                                        variables.insert(
                                             name,
                                             AnalyzedVariable {
                                                 assignments: [(
@@ -310,7 +316,7 @@ impl ShallowAnalyzer {
                             .and_then(|expr| expr.as_primary_string())
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
-                            analyzed_block.targets.insert(
+                            targets.insert(
                                 name,
                                 AnalyzedTarget {
                                     name,
@@ -326,28 +332,35 @@ impl ShallowAnalyzer {
                 Statement::Condition(condition) => {
                     let mut current_condition = condition;
                     loop {
-                        analyzed_block.merge(&self.analyze_block(
+                        let analyzed_block = self.analyze_block(
                             &current_condition.then_block,
                             declare_args,
                             request_time,
                             document,
                             deps,
                             visiting,
-                        ));
+                        );
+                        variables.merge(analyzed_block.variables.as_ref().clone());
+                        templates.merge(analyzed_block.templates.as_ref().clone());
+                        targets.merge(analyzed_block.targets.as_ref().clone());
+
                         match &current_condition.else_block {
                             None => break,
                             Some(Either::Left(next_condition)) => {
                                 current_condition = next_condition;
                             }
                             Some(Either::Right(block)) => {
-                                analyzed_block.merge(&self.analyze_block(
+                                let analyzed_block = self.analyze_block(
                                     block,
                                     declare_args,
                                     request_time,
                                     document,
                                     deps,
                                     visiting,
-                                ));
+                                );
+                                variables.merge(analyzed_block.variables.as_ref().clone());
+                                templates.merge(analyzed_block.templates.as_ref().clone());
+                                targets.merge(analyzed_block.targets.as_ref().clone());
                                 break;
                             }
                         }
@@ -357,6 +370,10 @@ impl ShallowAnalyzer {
             }
         }
 
-        analyzed_block.finalize()
+        ShallowAnalyzedBlock {
+            variables: Arc::new(variables),
+            templates: Arc::new(templates),
+            targets: Arc::new(targets),
+        }
     }
 }

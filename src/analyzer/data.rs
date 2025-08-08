@@ -103,7 +103,7 @@ where
         for (name, item) in other.items {
             self.insert(name, item);
         }
-        self.imports.extend(other.imports.clone());
+        self.imports.extend(other.imports);
     }
 }
 
@@ -188,38 +188,6 @@ impl ShallowAnalyzedFile {
             Vec::new(),
             request_time,
         )
-    }
-}
-
-#[derive(Default)]
-pub struct MutableShallowAnalyzedBlock<'i, 'p> {
-    pub variables: AnalyzedVariableEnv<'i, 'p>,
-    pub templates: AnalyzedTemplateEnv<'i>,
-    pub targets: AnalyzedTargetEnv<'i, 'p>,
-}
-
-impl<'i, 'p> MutableShallowAnalyzedBlock<'i, 'p> {
-    pub fn new_top_level() -> Self {
-        Default::default()
-    }
-
-    pub fn merge(&mut self, other: &ShallowAnalyzedBlock<'i, 'p>) {
-        self.variables.merge(other.variables.as_ref().clone());
-        self.templates.merge(other.templates.as_ref().clone());
-        self.targets.merge(other.targets.as_ref().clone());
-    }
-
-    pub fn import(&mut self, other: &ShallowAnalyzedBlock<'i, 'p>) {
-        self.variables.import(&other.variables);
-        self.templates.import(&other.templates);
-    }
-
-    pub fn finalize(self) -> ShallowAnalyzedBlock<'i, 'p> {
-        ShallowAnalyzedBlock {
-            variables: Arc::new(self.variables),
-            templates: Arc::new(self.templates),
-            targets: Arc::new(self.targets),
-        }
     }
 }
 

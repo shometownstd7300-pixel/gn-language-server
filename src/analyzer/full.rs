@@ -25,13 +25,10 @@ use pest::Span;
 
 use crate::{
     analyzer::{
-        cache::AnalysisNode,
-        diagnostics::collect_diagnostics,
-        links::collect_links,
-        shallow::ShallowAnalyzer,
-        symbols::collect_symbols,
-        AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedImport,
-        AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
+        cache::AnalysisNode, diagnostics::collect_diagnostics, links::collect_links,
+        shallow::ShallowAnalyzer, symbols::collect_symbols, AnalyzedAssignment, AnalyzedBlock,
+        AnalyzedEvent, AnalyzedFile, AnalyzedImport, AnalyzedLink, AnalyzedTarget,
+        AnalyzedTemplate, WorkspaceContext,
     },
     common::{
         builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
