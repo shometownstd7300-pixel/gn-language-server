@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use itertools::Itertools;
-use tower_lsp::lsp_types::{Position, TextDocumentIdentifier};
+use tower_lsp::lsp_types::{Position, TextDocumentIdentifier, Url};
 
 use crate::{
-    analyzer::{AnalyzedFile, AnalyzedTarget, ShallowAnalyzedFile},
+    analyzer::{
+        AnalyzedFile, AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable, ShallowAnalyzedFile,
+    },
     common::error::{Error, Result},
-    parser::{Identifier, Node},
+    parser::{Identifier, Node, Statement},
 };
 
 pub fn get_text_document_path(text_document: &TextDocumentIdentifier) -> Result<PathBuf> {
@@ -67,4 +69,110 @@ pub fn find_target<'a>(
     }
 
     None
+}
+
+pub fn format_path(path: &Path, workspace_root: &Path) -> String {
+    if let Ok(relative_path) = path.strip_prefix(workspace_root) {
+        format!("//{}", relative_path.to_string_lossy())
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
+
+pub fn format_variable_help(variable: &AnalyzedVariable, workspace_root: &Path) -> Vec<String> {
+    let first_assignment = variable
+        .assignments
+        .values()
+        .sorted_by_key(|a| (&a.document.path, a.statement.span().start()))
+        .next()
+        .unwrap();
+    let single_assignment = variable.assignments.len() == 1;
+
+    let snippet = if single_assignment {
+        match first_assignment.statement {
+            Statement::Assignment(assignment) => {
+                let raw_value = assignment.rvalue.span().as_str();
+                let display_value = if raw_value.lines().count() <= 5 {
+                    raw_value
+                } else {
+                    "..."
+                };
+                format!(
+                    "{} {} {}",
+                    assignment.lvalue.span().as_str(),
+                    assignment.op,
+                    display_value
+                )
+            }
+            Statement::Call(call) => {
+                assert_eq!(call.function.name, "forward_variables_from");
+                call.span.as_str().to_string()
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        format!("{} = ...", first_assignment.name)
+    };
+
+    let mut paragraphs = vec![format!("```gn\n{snippet}\n```")];
+
+    if single_assignment {
+        if let Statement::Assignment(assignment) = first_assignment.statement {
+            paragraphs.push(format!(
+                "```text\n{}\n```",
+                assignment.comments.to_string().trim()
+            ));
+        };
+    }
+
+    let position = first_assignment
+        .document
+        .line_index
+        .position(first_assignment.statement.span().start());
+    paragraphs.push(if single_assignment {
+        format!(
+            "Defined at [{}:{}:{}]({}#L{},{})",
+            format_path(&first_assignment.document.path, workspace_root),
+            position.line + 1,
+            position.character + 1,
+            Url::from_file_path(&first_assignment.document.path).unwrap(),
+            position.line + 1,
+            position.character + 1,
+        )
+    } else {
+        format!(
+            "Defined and modified in {} locations",
+            variable.assignments.len()
+        )
+    });
+
+    paragraphs
+}
+
+pub fn format_template_help(template: &AnalyzedTemplate, workspace_root: &Path) -> Vec<String> {
+    let mut paragraphs = vec![format!(
+        "```gn\ntemplate(\"{}\") {{ ... }}\n```",
+        template.name
+    )];
+    if !template.comments.is_empty() {
+        paragraphs.push(format!(
+            "```text\n{}\n```",
+            template.comments.to_string().trim()
+        ));
+    };
+    let position = template
+        .document
+        .line_index
+        .position(template.header.start());
+    paragraphs.push(format!(
+        "Defined at [{}:{}:{}]({}#L{},{})",
+        format_path(&template.document.path, workspace_root),
+        position.line + 1,
+        position.character + 1,
+        Url::from_file_path(&template.document.path).unwrap(),
+        position.line + 1,
+        position.character + 1,
+    ));
+
+    paragraphs
 }

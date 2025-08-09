@@ -22,7 +22,7 @@ use std::{
 
 pub use data::{
     AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedImport, AnalyzedLink,
-    AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedFile,
+    AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable, ShallowAnalyzedFile,
 };
 
 use crate::{

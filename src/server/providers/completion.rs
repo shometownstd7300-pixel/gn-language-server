@@ -22,8 +22,11 @@ use tower_lsp::lsp_types::{
 
 use crate::{
     common::{builtins::BUILTINS, error::Result},
-    parser::{Block, Node, Statement},
-    server::{providers::utils::get_text_document_path, RequestContext},
+    parser::{Block, Node},
+    server::{
+        providers::utils::{format_template_help, format_variable_help, get_text_document_path},
+        RequestContext,
+    },
 };
 
 fn is_after_dot(data: &str, offset: usize) -> bool {
@@ -122,70 +125,28 @@ pub async fn completion(
     let templates = current_file.templates_at(offset);
 
     // Enumerate variables at the current scope.
-    let variable_items = variables
-        .all_items()
-        .into_iter()
-        .filter_map(|(name, variable)| {
-            let (_, first_assignment) = variable
-                .assignments
-                .iter()
-                .sorted_by_key(|(_, a)| (&a.document.path, a.statement.span().start()))
-                .next()?;
-            let single_assignment = variable.assignments.len() == 1;
-            let snippet = if single_assignment {
-                match first_assignment.statement {
-                    Statement::Assignment(assignment) => {
-                        let raw_value = assignment.rvalue.span().as_str();
-                        let display_value = if raw_value.lines().count() <= 5 {
-                            raw_value
-                        } else {
-                            "..."
-                        };
-                        format!(
-                            "{} {} {}",
-                            assignment.lvalue.span().as_str(),
-                            assignment.op,
-                            display_value
-                        )
-                    }
-                    Statement::Call(call) => {
-                        assert_eq!(call.function.name, "forward_variables_from");
-                        call.span.as_str().to_string()
-                    }
-                    _ => unreachable!(),
-                }
-            } else {
-                format!("{name} = ...")
-            };
-            Some(CompletionItem {
-                label: name.to_string(),
-                kind: Some(CompletionItemKind::VARIABLE),
-                documentation: Some(Documentation::MarkupContent(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: format!("```gn\n{snippet}\n```\n"),
-                })),
-                ..Default::default()
-            })
-        });
+    let variable_items = variables.all_items().into_iter().map(|(name, variable)| {
+        let paragraphs = format_variable_help(&variable, &current_file.workspace_root);
+        CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::VARIABLE),
+            documentation: Some(Documentation::MarkupContent(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: paragraphs.join("\n\n"),
+            })),
+            ..Default::default()
+        }
+    });
 
     // Enumerate templates defined at the current position.
     let template_items = templates.all_items().into_values().map(|template| {
-        let doc_header = format!("```gn\ntemplate(\"{}\") {{ ... }}\n```\n", template.name);
-
-        let doc_comments = if template.comments.is_empty() {
-            String::new()
-        } else {
-            format!("```text\n{}\n```\n", template.comments)
-        };
-
-        let doc = [doc_header, doc_comments].concat();
-
+        let paragraphs = format_template_help(&template, &current_file.workspace_root);
         CompletionItem {
             label: template.name.to_string(),
             kind: Some(CompletionItemKind::FUNCTION),
             documentation: Some(Documentation::MarkupContent(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value: doc,
+                value: paragraphs.join("\n\n"),
             })),
             ..Default::default()
         }
