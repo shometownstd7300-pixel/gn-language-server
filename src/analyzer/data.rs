@@ -43,18 +43,18 @@ impl WorkspaceContext {
 }
 
 #[derive(Clone)]
-pub struct Environment<'i, T> {
-    imports: Vec<Arc<Environment<'i, T>>>,
+pub struct Scope<'i, T> {
+    imports: Vec<Arc<Scope<'i, T>>>,
     locals: HashMap<&'i str, T>,
 }
 
-impl<T> Default for Environment<'_, T> {
+impl<T> Default for Scope<'_, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'i, T> Environment<'i, T> {
+impl<'i, T> Scope<'i, T> {
     pub fn new() -> Self {
         Self {
             imports: Vec::new(),
@@ -72,7 +72,7 @@ impl<'i, T> Environment<'i, T> {
             .or_else(|| self.imports.iter().find_map(|import| import.get(name)))
     }
 
-    pub fn import(&mut self, other: &Arc<Environment<'i, T>>) {
+    pub fn import(&mut self, other: &Arc<Scope<'i, T>>) {
         self.imports.push(Arc::clone(other));
     }
 
@@ -84,7 +84,7 @@ impl<'i, T> Environment<'i, T> {
         self.locals.entry(name).or_insert_with(f)
     }
 
-    pub fn merge(&mut self, other: Environment<'i, T>) {
+    pub fn merge(&mut self, other: Scope<'i, T>) {
         for (name, item) in other.locals {
             self.insert(name, item);
         }
@@ -92,7 +92,7 @@ impl<'i, T> Environment<'i, T> {
     }
 }
 
-impl<'i, T> Environment<'i, T>
+impl<'i, T> Scope<'i, T>
 where
     T: Clone,
 {
@@ -175,9 +175,9 @@ impl ShallowAnalyzedFile {
 
 #[derive(Default)]
 pub struct ShallowAnalyzedBlock<'i, 'p> {
-    pub variables: Arc<AnalyzedVariableEnv<'i, 'p>>,
-    pub templates: Arc<AnalyzedTemplateEnv<'i>>,
-    pub targets: Arc<AnalyzedTargetEnv<'i, 'p>>,
+    pub variables: Arc<AnalyzedVariableScope<'i, 'p>>,
+    pub templates: Arc<AnalyzedTemplateScope<'i>>,
+    pub targets: Arc<AnalyzedTargetScope<'i, 'p>>,
 }
 
 impl ShallowAnalyzedBlock<'_, '_> {
@@ -229,11 +229,11 @@ impl AnalyzedFile {
         })
     }
 
-    pub fn variables_at(&self, pos: usize) -> AnalyzedVariableEnv {
+    pub fn variables_at(&self, pos: usize) -> AnalyzedVariableScope {
         self.analyzed_root.variables_at(pos)
     }
 
-    pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateEnv {
+    pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateScope {
         self.analyzed_root.templates_at(pos)
     }
 }
@@ -255,8 +255,8 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         })
     }
 
-    pub fn variables_at(&self, pos: usize) -> AnalyzedVariableEnv<'i, 'p> {
-        let mut variables = AnalyzedVariableEnv::new();
+    pub fn variables_at(&self, pos: usize) -> AnalyzedVariableScope<'i, 'p> {
+        let mut variables = AnalyzedVariableScope::new();
 
         // First pass: Collect all variables in the scope.
         let mut declare_args_stack: Vec<&AnalyzedBlock> = Vec::new();
@@ -302,8 +302,8 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         variables
     }
 
-    pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateEnv<'i> {
-        let mut templates = AnalyzedTemplateEnv::new();
+    pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateScope<'i> {
+        let mut templates = AnalyzedTemplateScope::new();
 
         // First pass: Collect all templates in the scope.
         for event in self.top_level_events() {
@@ -399,7 +399,7 @@ pub struct AnalyzedVariable<'i, 'p> {
     pub is_args: bool,
 }
 
-pub type AnalyzedVariableEnv<'i, 'p> = Environment<'i, AnalyzedVariable<'i, 'p>>;
+pub type AnalyzedVariableScope<'i, 'p> = Scope<'i, AnalyzedVariable<'i, 'p>>;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct AnalyzedTemplate<'i> {
@@ -410,7 +410,7 @@ pub struct AnalyzedTemplate<'i> {
     pub span: Span<'i>,
 }
 
-pub type AnalyzedTemplateEnv<'i> = Environment<'i, AnalyzedTemplate<'i>>;
+pub type AnalyzedTemplateScope<'i> = Scope<'i, AnalyzedTemplate<'i>>;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct AnalyzedTarget<'i, 'p> {
@@ -421,7 +421,7 @@ pub struct AnalyzedTarget<'i, 'p> {
     pub span: Span<'i>,
 }
 
-pub type AnalyzedTargetEnv<'i, 'p> = Environment<'i, AnalyzedTarget<'i, 'p>>;
+pub type AnalyzedTargetScope<'i, 'p> = Scope<'i, AnalyzedTarget<'i, 'p>>;
 
 #[derive(Clone, Eq, PartialEq)]
 pub enum AnalyzedLink<'i> {

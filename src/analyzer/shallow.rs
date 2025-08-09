@@ -26,8 +26,8 @@ use crate::{
     analyzer::{
         cache::AnalysisNode,
         data::{
-            AnalyzedAssignment, AnalyzedTarget, AnalyzedTargetEnv, AnalyzedTemplate,
-            AnalyzedTemplateEnv, AnalyzedVariable, AnalyzedVariableEnv, ShallowAnalyzedBlock,
+            AnalyzedAssignment, AnalyzedTarget, AnalyzedTargetScope, AnalyzedTemplate,
+            AnalyzedTemplateScope, AnalyzedVariable, AnalyzedVariableScope, ShallowAnalyzedBlock,
             ShallowAnalyzedFile, WorkspaceContext,
         },
         links::collect_links,
@@ -189,9 +189,9 @@ impl ShallowAnalyzer {
         deps: &mut Vec<Arc<AnalysisNode>>,
         visiting: &mut Vec<PathBuf>,
     ) -> ShallowAnalyzedBlock<'i, 'p> {
-        let mut variables = AnalyzedVariableEnv::new();
-        let mut templates = AnalyzedTemplateEnv::new();
-        let mut targets = AnalyzedTargetEnv::new();
+        let mut variables = AnalyzedVariableScope::new();
+        let mut templates = AnalyzedTemplateScope::new();
+        let mut targets = AnalyzedTargetScope::new();
 
         for statement in &block.statements {
             match statement {
