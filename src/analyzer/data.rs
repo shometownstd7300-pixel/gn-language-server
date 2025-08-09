@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
@@ -42,27 +42,21 @@ impl WorkspaceContext {
     }
 }
 
-pub trait Merge {
-    fn merge(&mut self, other: Self);
-}
-
 #[derive(Clone)]
 pub struct Environment<'i, T> {
-    parent: Option<Arc<Environment<'i, T>>>,
     imports: Vec<Arc<Environment<'i, T>>>,
     locals: HashMap<&'i str, T>,
 }
 
 impl<T> Default for Environment<'_, T> {
     fn default() -> Self {
-        Self::new(None)
+        Self::new()
     }
 }
 
 impl<'i, T> Environment<'i, T> {
-    pub fn new(parent: Option<Arc<Environment<'i, T>>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            parent,
             imports: Vec::new(),
             locals: HashMap::new(),
         }
@@ -75,28 +69,19 @@ impl<'i, T> Environment<'i, T> {
     pub fn get(&self, name: &str) -> Option<&T> {
         self.locals
             .get(name)
-            .or_else(|| self.parent.as_ref().and_then(|p| p.get(name)))
             .or_else(|| self.imports.iter().find_map(|import| import.get(name)))
     }
 
     pub fn import(&mut self, other: &Arc<Environment<'i, T>>) {
         self.imports.push(Arc::clone(other));
     }
-}
 
-impl<'i, T> Environment<'i, T>
-where
-    T: Merge,
-{
     pub fn insert(&mut self, name: &'i str, item: T) {
-        match self.locals.entry(name) {
-            Entry::Occupied(mut entry) => {
-                entry.get_mut().merge(item);
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(item);
-            }
-        }
+        self.locals.insert(name, item);
+    }
+
+    pub fn ensure(&mut self, name: &'i str, f: impl FnOnce() -> T) -> &mut T {
+        self.locals.entry(name).or_insert_with(f)
     }
 
     pub fn merge(&mut self, other: Environment<'i, T>) {
@@ -124,9 +109,6 @@ where
     ) {
         if !visited.insert(self as *const Self) {
             return;
-        }
-        if let Some(parent) = &self.parent {
-            parent.collect_items(items, visited);
         }
         for import in &self.imports {
             import.collect_items(items, visited);
@@ -248,7 +230,7 @@ impl AnalyzedFile {
     }
 
     pub fn variables_at(&self, pos: usize) -> AnalyzedVariableEnv {
-        self.analyzed_root.variables_at(pos, None)
+        self.analyzed_root.variables_at(pos)
     }
 
     pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateEnv {
@@ -273,15 +255,11 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         })
     }
 
-    pub fn variables_at(
-        &self,
-        pos: usize,
-        parent: Option<Arc<AnalyzedVariableEnv<'i, 'p>>>,
-    ) -> AnalyzedVariableEnv<'i, 'p> {
-        let mut variables = AnalyzedVariableEnv::new(parent);
-        let mut declare_args_stack: Vec<&AnalyzedBlock> = Vec::new();
+    pub fn variables_at(&self, pos: usize) -> AnalyzedVariableEnv<'i, 'p> {
+        let mut variables = AnalyzedVariableEnv::new();
 
         // First pass: Collect all variables in the scope.
+        let mut declare_args_stack: Vec<&AnalyzedBlock> = Vec::new();
         for event in self.top_level_events() {
             match event {
                 AnalyzedEvent::Assignment(assignment) => {
@@ -292,13 +270,13 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                         }
                         declare_args_stack.pop();
                     }
-                    variables.insert(
-                        assignment.name,
-                        AnalyzedVariable {
+                    variables
+                        .ensure(assignment.name, || AnalyzedVariable {
                             assignments: [(assignment.variable_span, assignment.clone())].into(),
                             is_args: !declare_args_stack.is_empty(),
-                        },
-                    );
+                        })
+                        .assignments
+                        .insert(assignment.variable_span, assignment.clone());
                 }
                 AnalyzedEvent::Import(import) => {
                     // TODO: Handle import() within declare_args.
@@ -311,11 +289,12 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
             }
         }
 
-        // Second pass: Find the subscope that contains the position.
+        // Second pass: Find the subscope that contains the position, and merge
+        // its variables.
         for event in self.top_level_events() {
             if let AnalyzedEvent::NewScope(block) = event {
                 if block.span.start() < pos && pos < block.span.end() {
-                    return block.variables_at(pos, Some(Arc::new(variables)));
+                    variables.merge(block.variables_at(pos));
                 }
             }
         }
@@ -324,42 +303,31 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
     }
 
     pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateEnv<'i> {
-        let mut templates = AnalyzedTemplateEnv::new(None);
-        for event in &self.events {
+        let mut templates = AnalyzedTemplateEnv::new();
+
+        // First pass: Collect all templates in the scope.
+        for event in self.top_level_events() {
             match event {
-                AnalyzedEvent::Conditions(blocks) => {
-                    if blocks.last().unwrap().span.end() <= pos {
-                        for block in blocks {
-                            templates.merge(block.templates_at(pos));
-                        }
-                    } else {
-                        for block in blocks {
-                            if block.span.start() <= pos && pos <= block.span.end() {
-                                templates.merge(block.templates_at(pos));
-                            }
-                        }
-                    }
+                AnalyzedEvent::Template(template) => {
+                    templates.insert(template.name, template.clone());
                 }
                 AnalyzedEvent::Import(import) => {
-                    if import.span.end() <= pos {
-                        templates.merge(import.file.analyzed_root.templates.as_ref().clone());
-                    }
+                    templates.import(&import.file.analyzed_root.templates);
                 }
-                AnalyzedEvent::Template(template) => {
-                    if template.span.end() <= pos {
-                        templates.insert(template.name, template.clone());
-                    }
-                }
-                AnalyzedEvent::NewScope(block) => {
-                    if block.span.start() <= pos && pos <= block.span.end() {
-                        templates.merge(block.templates_at(pos));
-                    }
-                }
-                AnalyzedEvent::Assignment(_)
-                | AnalyzedEvent::DeclareArgs(_)
-                | AnalyzedEvent::Target(_) => {}
+                _ => {}
             }
         }
+
+        // Second pass: Find the subscope that contains the position, and merge
+        // its templates.
+        for event in self.top_level_events() {
+            if let AnalyzedEvent::NewScope(block) = event {
+                if block.span.start() < pos && pos < block.span.end() {
+                    templates.merge(block.templates_at(pos));
+                }
+            }
+        }
+
         templates
     }
 }
@@ -404,7 +372,7 @@ impl<'i, 'p, 'a> Iterator for TopLevelEvents<'i, 'p, 'a> {
 
 pub enum AnalyzedEvent<'i, 'p> {
     Conditions(Vec<AnalyzedBlock<'i, 'p>>),
-    Import(AnalyzedImport<'i>),
+    Import(AnalyzedImport),
     DeclareArgs(AnalyzedBlock<'i, 'p>),
     Assignment(AnalyzedAssignment<'i, 'p>),
     Template(AnalyzedTemplate<'i>),
@@ -412,9 +380,8 @@ pub enum AnalyzedEvent<'i, 'p> {
     NewScope(AnalyzedBlock<'i, 'p>),
 }
 
-pub struct AnalyzedImport<'i> {
+pub struct AnalyzedImport {
     pub file: Pin<Arc<ShallowAnalyzedFile>>,
-    pub span: Span<'i>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -432,12 +399,6 @@ pub struct AnalyzedVariable<'i, 'p> {
     pub is_args: bool,
 }
 
-impl Merge for AnalyzedVariable<'_, '_> {
-    fn merge(&mut self, other: Self) {
-        self.assignments.extend(other.assignments);
-    }
-}
-
 pub type AnalyzedVariableEnv<'i, 'p> = Environment<'i, AnalyzedVariable<'i, 'p>>;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -449,10 +410,6 @@ pub struct AnalyzedTemplate<'i> {
     pub span: Span<'i>,
 }
 
-impl Merge for AnalyzedTemplate<'_> {
-    fn merge(&mut self, _other: Self) {}
-}
-
 pub type AnalyzedTemplateEnv<'i> = Environment<'i, AnalyzedTemplate<'i>>;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -462,10 +419,6 @@ pub struct AnalyzedTarget<'i, 'p> {
     pub document: &'i Document,
     pub header: Span<'i>,
     pub span: Span<'i>,
-}
-
-impl Merge for AnalyzedTarget<'_, '_> {
-    fn merge(&mut self, _other: Self) {}
 }
 
 pub type AnalyzedTargetEnv<'i, 'p> = Environment<'i, AnalyzedTarget<'i, 'p>>;

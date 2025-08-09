@@ -189,9 +189,9 @@ impl ShallowAnalyzer {
         deps: &mut Vec<Arc<AnalysisNode>>,
         visiting: &mut Vec<PathBuf>,
     ) -> ShallowAnalyzedBlock<'i, 'p> {
-        let mut variables = AnalyzedVariableEnv::new(None);
-        let mut templates = AnalyzedTemplateEnv::new(None);
-        let mut targets = AnalyzedTargetEnv::new(None);
+        let mut variables = AnalyzedVariableEnv::new();
+        let mut templates = AnalyzedTemplateEnv::new();
+        let mut targets = AnalyzedTargetEnv::new();
 
         for statement in &block.statements {
             match statement {

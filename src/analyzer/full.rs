@@ -21,7 +21,6 @@ use std::{
 };
 
 use either::Either;
-use pest::Span;
 
 use crate::{
     analyzer::{
@@ -123,7 +122,6 @@ impl FullAnalyzer {
             0,
             AnalyzedEvent::Import(AnalyzedImport {
                 file: dot_gn_file.clone(),
-                span: Span::new(&document.data, 0, 0).unwrap(),
             }),
         );
         deps.push(dot_gn_file.node.clone());
@@ -196,10 +194,7 @@ impl FullAnalyzer {
                                 .resolve_path(name, document.path.parent().unwrap());
                             let file = self.shallow_analyzer.analyze(&path, request_time);
                             deps.push(file.node.clone());
-                            events.push(AnalyzedEvent::Import(AnalyzedImport {
-                                file,
-                                span: call.span(),
-                            }));
+                            events.push(AnalyzedEvent::Import(AnalyzedImport { file }));
                         }
                     }
                     TEMPLATE => {
