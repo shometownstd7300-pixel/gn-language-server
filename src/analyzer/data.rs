@@ -50,7 +50,7 @@ pub trait Merge {
 pub struct Environment<'i, T> {
     parent: Option<Arc<Environment<'i, T>>>,
     imports: Vec<Arc<Environment<'i, T>>>,
-    items: HashMap<&'i str, T>,
+    locals: HashMap<&'i str, T>,
 }
 
 impl<T> Default for Environment<'_, T> {
@@ -64,16 +64,16 @@ impl<'i, T> Environment<'i, T> {
         Self {
             parent,
             imports: Vec::new(),
-            items: HashMap::new(),
+            locals: HashMap::new(),
         }
     }
 
-    pub fn items(&self) -> &HashMap<&'i str, T> {
-        &self.items
+    pub fn locals(&self) -> &HashMap<&'i str, T> {
+        &self.locals
     }
 
     pub fn get(&self, name: &str) -> Option<&T> {
-        self.items
+        self.locals
             .get(name)
             .or_else(|| self.parent.as_ref().and_then(|p| p.get(name)))
             .or_else(|| self.imports.iter().find_map(|import| import.get(name)))
@@ -89,7 +89,7 @@ where
     T: Merge,
 {
     pub fn insert(&mut self, name: &'i str, item: T) {
-        match self.items.entry(name) {
+        match self.locals.entry(name) {
             Entry::Occupied(mut entry) => {
                 entry.get_mut().merge(item);
             }
@@ -100,7 +100,7 @@ where
     }
 
     pub fn merge(&mut self, other: Environment<'i, T>) {
-        for (name, item) in other.items {
+        for (name, item) in other.locals {
             self.insert(name, item);
         }
         self.imports.extend(other.imports);
@@ -131,7 +131,7 @@ where
         for import in &self.imports {
             import.collect_items(items, visited);
         }
-        for (name, item) in &self.items {
+        for (name, item) in &self.locals {
             items.insert(name, item.clone());
         }
     }

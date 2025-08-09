@@ -54,7 +54,7 @@ pub fn find_target<'a>(
     let targets: Vec<_> = file
         .analyzed_root
         .targets
-        .items()
+        .locals()
         .values()
         .sorted_by_key(|target| (&target.document.path, target.span.start()))
         .collect();
