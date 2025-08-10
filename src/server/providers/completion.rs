@@ -21,6 +21,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
+    analyzer::AnalyzedFile,
     common::{builtins::BUILTINS, error::Result},
     parser::{Block, Node},
     server::{
@@ -28,17 +29,6 @@ use crate::{
         RequestContext,
     },
 };
-
-fn is_after_dot(data: &str, offset: usize) -> bool {
-    for ch in data[..offset].chars().rev() {
-        match ch {
-            '.' => return true,
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '_' => continue,
-            _ => return false,
-        }
-    }
-    false
-}
 
 fn get_prefix_string_for_completion<'i>(ast_root: &Block<'i>, offset: usize) -> Option<&'i str> {
     ast_root
@@ -87,38 +77,22 @@ fn build_filename_completions(path: &Path, prefix: &str) -> Option<Vec<Completio
     )
 }
 
-pub async fn completion(
-    context: &RequestContext,
-    params: CompletionParams,
-) -> Result<Option<CompletionResponse>> {
-    let path = get_text_document_path(&params.text_document_position.text_document)?;
-    let current_file = context.analyzer.analyze(&path, context.request_time)?;
-
-    let offset = current_file
-        .document
-        .line_index
-        .offset(params.text_document_position.position)
-        .unwrap_or(0);
-
-    // Handle string completions.
-    if let Some(prefix) = get_prefix_string_for_completion(&current_file.ast_root, offset) {
-        // Target completions are not supported yet.
-        if prefix.starts_with('/')
-            || prefix.starts_with(':')
-            || prefix.starts_with(std::path::MAIN_SEPARATOR)
-        {
-            return Ok(None);
+fn is_after_dot(data: &str, offset: usize) -> bool {
+    for ch in data[..offset].chars().rev() {
+        match ch {
+            '.' => return true,
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '_' => continue,
+            _ => return false,
         }
-        if let Some(items) = build_filename_completions(&current_file.document.path, prefix) {
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-        return Ok(None);
     }
+    false
+}
 
+fn identifier_completions(current_file: &AnalyzedFile, offset: usize) -> Vec<CompletionItem> {
     // Handle identifier completions.
     // If the cursor is after a dot, we can't make suggestions.
     if is_after_dot(&current_file.document.data, offset) {
-        return Ok(None);
+        return Vec::new();
     }
 
     let variables = current_file.variables_at(offset);
@@ -187,11 +161,43 @@ pub async fn completion(
         ..Default::default()
     });
 
-    let items: Vec<CompletionItem> = variable_items
+    variable_items
         .chain(template_items)
         .chain(builtin_function_items)
         .chain(builtin_variable_items)
         .chain(keyword_items)
-        .collect();
+        .collect()
+}
+
+pub async fn completion(
+    context: &RequestContext,
+    params: CompletionParams,
+) -> Result<Option<CompletionResponse>> {
+    let path = get_text_document_path(&params.text_document_position.text_document)?;
+    let current_file = context.analyzer.analyze(&path, context.request_time)?;
+
+    let offset = current_file
+        .document
+        .line_index
+        .offset(params.text_document_position.position)
+        .unwrap_or(0);
+
+    // Handle string completions.
+    if let Some(prefix) = get_prefix_string_for_completion(&current_file.ast_root, offset) {
+        // Target completions are not supported yet.
+        if prefix.starts_with('/')
+            || prefix.starts_with(':')
+            || prefix.starts_with(std::path::MAIN_SEPARATOR)
+        {
+            return Ok(None);
+        }
+        if let Some(items) = build_filename_completions(&current_file.document.path, prefix) {
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+        return Ok(None);
+    }
+
+    // Handle identifier completions.
+    let items = identifier_completions(&current_file, offset);
     Ok(Some(CompletionResponse::Array(items)))
 }
