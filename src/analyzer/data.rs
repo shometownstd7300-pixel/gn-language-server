@@ -272,11 +272,17 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                     }
                     variables
                         .ensure(assignment.name, || AnalyzedVariable {
-                            assignments: [(assignment.variable_span, assignment.clone())].into(),
+                            assignments: Default::default(),
                             is_args: !declare_args_stack.is_empty(),
                         })
                         .assignments
-                        .insert(assignment.variable_span, assignment.clone());
+                        .insert(
+                            AnalyzedVariableLocation {
+                                path: &assignment.document.path,
+                                start: assignment.variable_span.start(),
+                            },
+                            assignment.clone(),
+                        );
                 }
                 AnalyzedEvent::Import(import) => {
                     // TODO: Handle import() within declare_args.
@@ -393,9 +399,15 @@ pub struct AnalyzedAssignment<'i, 'p> {
     pub variable_span: Span<'i>,
 }
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct AnalyzedVariableLocation<'i> {
+    pub path: &'i Path,
+    pub start: usize,
+}
+
 #[derive(Clone, Default)]
 pub struct AnalyzedVariable<'i, 'p> {
-    pub assignments: HashMap<Span<'i>, AnalyzedAssignment<'i, 'p>>,
+    pub assignments: HashMap<AnalyzedVariableLocation<'i>, AnalyzedAssignment<'i, 'p>>,
     pub is_args: bool,
 }
 

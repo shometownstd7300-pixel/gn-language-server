@@ -27,8 +27,8 @@ use crate::{
         cache::AnalysisNode,
         data::{
             AnalyzedAssignment, AnalyzedTarget, AnalyzedTargetScope, AnalyzedTemplate,
-            AnalyzedTemplateScope, AnalyzedVariable, AnalyzedVariableScope, ShallowAnalyzedBlock,
-            ShallowAnalyzedFile, WorkspaceContext,
+            AnalyzedTemplateScope, AnalyzedVariable, AnalyzedVariableLocation,
+            AnalyzedVariableScope, ShallowAnalyzedBlock, ShallowAnalyzedFile, WorkspaceContext,
         },
         links::collect_links,
         AnalyzedLink,
@@ -235,7 +235,10 @@ impl ShallowAnalyzer {
                             identifier.name,
                             AnalyzedVariable {
                                 assignments: [(
-                                    identifier.span,
+                                    AnalyzedVariableLocation {
+                                        path: &document.path,
+                                        start: identifier.span.start(),
+                                    },
                                     AnalyzedAssignment {
                                         name: identifier.name,
                                         comments: assignment.comments.clone(),
@@ -322,7 +325,10 @@ impl ShallowAnalyzer {
                                             name,
                                             AnalyzedVariable {
                                                 assignments: [(
-                                                    string.span,
+                                                    AnalyzedVariableLocation {
+                                                        path: &document.path,
+                                                        start: string.span.start(),
+                                                    },
                                                     AnalyzedAssignment {
                                                         name,
                                                         comments: Comments::default(),
