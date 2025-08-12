@@ -24,10 +24,13 @@ use either::Either;
 
 use crate::{
     analyzer::{
-        cache::AnalysisNode, diagnostics::collect_diagnostics, links::collect_links,
-        shallow::ShallowAnalyzer, symbols::collect_symbols, AnalyzedAssignment, AnalyzedBlock,
-        AnalyzedEvent, AnalyzedFile, AnalyzedImport, AnalyzedLink, AnalyzedTarget,
-        AnalyzedTemplate, WorkspaceContext,
+        cache::AnalysisNode,
+        diagnostics::collect_diagnostics,
+        links::collect_links,
+        shallow::{ShallowAnalysisSnapshot, ShallowAnalyzer},
+        symbols::collect_symbols,
+        AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedImport,
+        AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
     },
     common::{
         builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
@@ -112,12 +115,14 @@ impl FullAnalyzer {
         let ast_root = Box::pin(parse(&document.data));
 
         let mut deps = Vec::new();
-        let mut analyzed_root = self.analyze_block(&ast_root, request_time, &document, &mut deps);
+        let mut snapshot = ShallowAnalysisSnapshot::new();
+        let mut analyzed_root =
+            self.analyze_block(&ast_root, &document, request_time, &mut snapshot, &mut deps);
 
         // Insert a synthetic import of BUILDCONFIG.gn.
-        let dot_gn_file = self
-            .shallow_analyzer
-            .analyze(&self.context.build_config, request_time);
+        let dot_gn_file =
+            self.shallow_analyzer
+                .analyze(&self.context.build_config, request_time, &mut snapshot);
         analyzed_root.events.insert(
             0,
             AnalyzedEvent::Import(AnalyzedImport {
@@ -154,8 +159,9 @@ impl FullAnalyzer {
     fn analyze_block<'i, 'p>(
         &self,
         block: &'p Block<'i>,
-        request_time: Instant,
         document: &'i Document,
+        request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
         deps: &mut Vec<Arc<AnalysisNode>>,
     ) -> AnalyzedBlock<'i, 'p> {
         let mut events: Vec<AnalyzedEvent> = Vec::new();
@@ -176,9 +182,15 @@ impl FullAnalyzer {
                         variable_span: identifier.span,
                     }));
                     events.extend(
-                        self.analyze_expr(&assignment.rvalue, request_time, document, deps)
-                            .into_iter()
-                            .map(AnalyzedEvent::NewScope),
+                        self.analyze_expr(
+                            &assignment.rvalue,
+                            document,
+                            request_time,
+                            snapshot,
+                            deps,
+                        )
+                        .into_iter()
+                        .map(AnalyzedEvent::NewScope),
                     );
                 }
                 Statement::Call(call) => match call.function.name {
@@ -191,7 +203,7 @@ impl FullAnalyzer {
                             let path = self
                                 .context
                                 .resolve_path(name, document.path.parent().unwrap());
-                            let file = self.shallow_analyzer.analyze(&path, request_time);
+                            let file = self.shallow_analyzer.analyze(&path, request_time, snapshot);
                             deps.push(file.node.clone());
                             events.push(AnalyzedEvent::Import(AnalyzedImport { file }));
                         }
@@ -213,8 +225,9 @@ impl FullAnalyzer {
                         if let Some(block) = &call.block {
                             events.push(AnalyzedEvent::NewScope(self.analyze_block(
                                 block,
-                                request_time,
                                 document,
+                                request_time,
+                                snapshot,
                                 deps,
                             )));
                         }
@@ -222,14 +235,14 @@ impl FullAnalyzer {
                     DECLARE_ARGS => {
                         if let Some(block) = &call.block {
                             let analyzed_root =
-                                self.analyze_block(block, request_time, document, deps);
+                                self.analyze_block(block, document, request_time, snapshot, deps);
                             events.push(AnalyzedEvent::DeclareArgs(analyzed_root));
                         }
                     }
                     FOREACH => {
                         if let Some(block) = &call.block {
                             events.extend(
-                                self.analyze_block(block, request_time, document, deps)
+                                self.analyze_block(block, document, request_time, snapshot, deps)
                                     .events,
                             );
                         }
@@ -237,7 +250,7 @@ impl FullAnalyzer {
                     SET_DEFAULTS => {
                         if let Some(block) = &call.block {
                             let analyzed_root =
-                                self.analyze_block(block, request_time, document, deps);
+                                self.analyze_block(block, document, request_time, snapshot, deps);
                             events.push(AnalyzedEvent::NewScope(analyzed_root));
                         }
                     }
@@ -283,8 +296,9 @@ impl FullAnalyzer {
                         if let Some(block) = &call.block {
                             events.push(AnalyzedEvent::NewScope(self.analyze_block(
                                 block,
-                                request_time,
                                 document,
+                                request_time,
+                                snapshot,
                                 deps,
                             )));
                         }
@@ -297,8 +311,9 @@ impl FullAnalyzer {
                         events.extend(
                             self.analyze_expr(
                                 &current_condition.condition,
-                                request_time,
                                 document,
+                                request_time,
+                                snapshot,
                                 deps,
                             )
                             .into_iter()
@@ -306,8 +321,9 @@ impl FullAnalyzer {
                         );
                         condition_blocks.push(self.analyze_block(
                             &current_condition.then_block,
-                            request_time,
                             document,
+                            request_time,
+                            snapshot,
                             deps,
                         ));
                         match &current_condition.else_block {
@@ -318,8 +334,9 @@ impl FullAnalyzer {
                             Some(Either::Right(block)) => {
                                 condition_blocks.push(self.analyze_block(
                                     block,
-                                    request_time,
                                     document,
+                                    request_time,
+                                    snapshot,
                                     deps,
                                 ));
                                 break;
@@ -341,36 +358,42 @@ impl FullAnalyzer {
     fn analyze_expr<'i, 'p>(
         &self,
         expr: &'p Expr<'i>,
-        request_time: Instant,
         document: &'i Document,
+        request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
         deps: &mut Vec<Arc<AnalysisNode>>,
     ) -> Vec<AnalyzedBlock<'i, 'p>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
-                    let analyzed_block = self.analyze_block(block, request_time, document, deps);
+                    let analyzed_block =
+                        self.analyze_block(block, document, request_time, snapshot, deps);
                     vec![analyzed_block]
                 }
                 PrimaryExpr::Call(call) => {
                     let mut analyzed_blocks: Vec<AnalyzedBlock> = call
                         .args
                         .iter()
-                        .flat_map(|expr| self.analyze_expr(expr, request_time, document, deps))
+                        .flat_map(|expr| {
+                            self.analyze_expr(expr, document, request_time, snapshot, deps)
+                        })
                         .collect();
                     if let Some(block) = &call.block {
                         let analyzed_block =
-                            self.analyze_block(block, request_time, document, deps);
+                            self.analyze_block(block, document, request_time, snapshot, deps);
                         analyzed_blocks.push(analyzed_block);
                     }
                     analyzed_blocks
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
-                    self.analyze_expr(&paren_expr.expr, request_time, document, deps)
+                    self.analyze_expr(&paren_expr.expr, document, request_time, snapshot, deps)
                 }
                 PrimaryExpr::List(list_literal) => list_literal
                     .values
                     .iter()
-                    .flat_map(|expr| self.analyze_expr(expr, request_time, document, deps))
+                    .flat_map(|expr| {
+                        self.analyze_expr(expr, document, request_time, snapshot, deps)
+                    })
                     .collect(),
                 PrimaryExpr::Identifier(_)
                 | PrimaryExpr::Integer(_)
@@ -380,15 +403,16 @@ impl FullAnalyzer {
                 | PrimaryExpr::Error(_) => Vec::new(),
             },
             Expr::Unary(unary_expr) => {
-                self.analyze_expr(&unary_expr.expr, request_time, document, deps)
+                self.analyze_expr(&unary_expr.expr, document, request_time, snapshot, deps)
             }
             Expr::Binary(binary_expr) => {
                 let mut analyzed_blocks =
-                    self.analyze_expr(&binary_expr.lhs, request_time, document, deps);
+                    self.analyze_expr(&binary_expr.lhs, document, request_time, snapshot, deps);
                 analyzed_blocks.extend(self.analyze_expr(
                     &binary_expr.rhs,
-                    request_time,
                     document,
+                    request_time,
+                    snapshot,
                     deps,
                 ));
                 analyzed_blocks

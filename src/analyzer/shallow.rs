@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex, OnceLock, RwLock},
@@ -44,6 +44,8 @@ use crate::{
 fn is_exported(name: &str) -> bool {
     !name.starts_with("_")
 }
+
+pub type ShallowAnalysisSnapshot = HashMap<PathBuf, Pin<Arc<ShallowAnalyzedFile>>>;
 
 pub struct ShallowAnalyzer {
     context: WorkspaceContext,
@@ -76,20 +78,42 @@ impl ShallowAnalyzer {
             .collect()
     }
 
-    pub fn analyze(&self, path: &Path, request_time: Instant) -> Pin<Arc<ShallowAnalyzedFile>> {
-        self.analyze_cached(path, request_time, &mut Vec::new())
+    pub fn analyze(
+        &self,
+        path: &Path,
+        request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
+    ) -> Pin<Arc<ShallowAnalyzedFile>> {
+        self.analyze_cached(path, request_time, snapshot, &mut Vec::new())
     }
 
     fn analyze_cached(
         &self,
         path: &Path,
         request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         if visiting.iter().any(|p| p == path) {
             return ShallowAnalyzedFile::error(path, request_time);
         }
 
+        if snapshot.contains_key(path) {
+            return snapshot.get(path).unwrap().clone();
+        }
+        let file = self.analyze_cached_inner(path, request_time, snapshot, visiting);
+        assert!(!snapshot.contains_key(path));
+        snapshot.insert(path.to_path_buf(), file.clone());
+        file
+    }
+
+    fn analyze_cached_inner(
+        &self,
+        path: &Path,
+        request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
+        visiting: &mut Vec<PathBuf>,
+    ) -> Pin<Arc<ShallowAnalyzedFile>> {
         let entry = {
             let read_lock = self.cache.read().unwrap();
             if let Some(entry) = read_lock.get(path) {
@@ -103,8 +127,8 @@ impl ShallowAnalyzer {
 
         {
             let read_lock = entry.read().unwrap();
-            let cached_file =
-                read_lock.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
+            let cached_file = read_lock
+                .get_or_init(|| self.analyze_uncached(path, request_time, snapshot, visiting));
             if cached_file
                 .node
                 .verify(request_time, &self.storage.lock().unwrap())
@@ -115,8 +139,8 @@ impl ShallowAnalyzer {
 
         let mut write_lock = entry.write().unwrap();
 
-        let cached_file =
-            write_lock.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
+        let cached_file = write_lock
+            .get_or_init(|| self.analyze_uncached(path, request_time, snapshot, visiting));
         if cached_file
             .node
             .verify(request_time, &self.storage.lock().unwrap())
@@ -125,8 +149,8 @@ impl ShallowAnalyzer {
         }
 
         *write_lock = Default::default();
-        let cached_file =
-            write_lock.get_or_init(|| self.analyze_uncached(path, request_time, visiting));
+        let cached_file = write_lock
+            .get_or_init(|| self.analyze_uncached(path, request_time, snapshot, visiting));
         if cached_file
             .node
             .verify(request_time, &self.storage.lock().unwrap())
@@ -140,10 +164,11 @@ impl ShallowAnalyzer {
         &self,
         path: &Path,
         request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         visiting.push(path.to_path_buf());
-        let result = self.analyze_uncached_inner(path, request_time, visiting);
+        let result = self.analyze_uncached_inner(path, request_time, snapshot, visiting);
         visiting.pop();
         result
     }
@@ -152,6 +177,7 @@ impl ShallowAnalyzer {
         &self,
         path: &Path,
         request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         let document = self.storage.lock().unwrap().read(path);
@@ -160,8 +186,9 @@ impl ShallowAnalyzer {
         let analyzed_root = self.analyze_block(
             &ast_root,
             false,
-            request_time,
             &document,
+            request_time,
+            snapshot,
             &mut deps,
             visiting,
         );
@@ -180,12 +207,14 @@ impl ShallowAnalyzer {
         ShallowAnalyzedFile::new(document, ast_root, analyzed_root, links, deps, request_time)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn analyze_block<'i, 'p>(
         &self,
         block: &'p Block<'i>,
         declare_args: bool,
-        request_time: Instant,
         document: &'i Document,
+        request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
         deps: &mut Vec<Arc<AnalysisNode>>,
         visiting: &mut Vec<PathBuf>,
     ) -> ShallowAnalyzedBlock<'i, 'p> {
@@ -231,7 +260,7 @@ impl ShallowAnalyzer {
                             let path = self
                                 .context
                                 .resolve_path(name, document.path.parent().unwrap());
-                            let file = self.analyze_cached(&path, request_time, visiting);
+                            let file = self.analyze_cached(&path, request_time, snapshot, visiting);
                             variables.import(&file.analyzed_root.variables);
                             templates.import(&file.analyzed_root.templates);
                             deps.push(file.node.clone());
@@ -262,8 +291,9 @@ impl ShallowAnalyzer {
                             let analyzed_block = &self.analyze_block(
                                 block,
                                 declare_args || call.function.name == DECLARE_ARGS,
-                                request_time,
                                 document,
+                                request_time,
+                                snapshot,
                                 deps,
                                 visiting,
                             );
@@ -335,8 +365,9 @@ impl ShallowAnalyzer {
                         let analyzed_block = self.analyze_block(
                             &current_condition.then_block,
                             declare_args,
-                            request_time,
                             document,
+                            request_time,
+                            snapshot,
                             deps,
                             visiting,
                         );
@@ -353,8 +384,9 @@ impl ShallowAnalyzer {
                                 let analyzed_block = self.analyze_block(
                                     block,
                                     declare_args,
-                                    request_time,
                                     document,
+                                    request_time,
+                                    snapshot,
                                     deps,
                                     visiting,
                                 );

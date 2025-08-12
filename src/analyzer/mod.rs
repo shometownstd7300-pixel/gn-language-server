@@ -26,7 +26,10 @@ pub use data::{
 };
 
 use crate::{
-    analyzer::{data::WorkspaceContext, dotgn::evaluate_dot_gn, full::FullAnalyzer},
+    analyzer::{
+        data::WorkspaceContext, dotgn::evaluate_dot_gn, full::FullAnalyzer,
+        shallow::ShallowAnalysisSnapshot,
+    },
     common::{
         error::{Error, Result},
         storage::DocumentStorage,
@@ -150,6 +153,8 @@ impl WorkspaceAnalyzer {
         path: &Path,
         request_time: Instant,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
-        self.analyzer.get_shallow().analyze(path, request_time)
+        self.analyzer
+            .get_shallow()
+            .analyze(path, request_time, &mut ShallowAnalysisSnapshot::new())
     }
 }
