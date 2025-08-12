@@ -175,12 +175,11 @@ impl FullAnalyzer {
                         document,
                         variable_span: identifier.span,
                     }));
-                    events.extend(self.analyze_expr(
-                        &assignment.rvalue,
-                        request_time,
-                        document,
-                        deps,
-                    ));
+                    events.extend(
+                        self.analyze_expr(&assignment.rvalue, request_time, document, deps)
+                            .into_iter()
+                            .map(AnalyzedEvent::NewScope),
+                    );
                 }
                 Statement::Call(call) => match call.function.name {
                     IMPORT => {
@@ -295,12 +294,16 @@ impl FullAnalyzer {
                     let mut condition_blocks = Vec::new();
                     let mut current_condition = condition;
                     loop {
-                        events.extend(self.analyze_expr(
-                            &current_condition.condition,
-                            request_time,
-                            document,
-                            deps,
-                        ));
+                        events.extend(
+                            self.analyze_expr(
+                                &current_condition.condition,
+                                request_time,
+                                document,
+                                deps,
+                            )
+                            .into_iter()
+                            .map(AnalyzedEvent::NewScope),
+                        );
                         condition_blocks.push(self.analyze_block(
                             &current_condition.then_block,
                             request_time,
@@ -341,24 +344,25 @@ impl FullAnalyzer {
         request_time: Instant,
         document: &'i Document,
         deps: &mut Vec<Arc<AnalysisNode>>,
-    ) -> Vec<AnalyzedEvent<'i, 'p>> {
+    ) -> Vec<AnalyzedBlock<'i, 'p>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {
                 PrimaryExpr::Block(block) => {
-                    let analyzed_root = self.analyze_block(block, request_time, document, deps);
-                    vec![AnalyzedEvent::NewScope(analyzed_root)]
+                    let analyzed_block = self.analyze_block(block, request_time, document, deps);
+                    vec![analyzed_block]
                 }
                 PrimaryExpr::Call(call) => {
-                    let mut events: Vec<AnalyzedEvent> = call
+                    let mut analyzed_blocks: Vec<AnalyzedBlock> = call
                         .args
                         .iter()
                         .flat_map(|expr| self.analyze_expr(expr, request_time, document, deps))
                         .collect();
                     if let Some(block) = &call.block {
-                        let analyzed_root = self.analyze_block(block, request_time, document, deps);
-                        events.push(AnalyzedEvent::NewScope(analyzed_root));
+                        let analyzed_block =
+                            self.analyze_block(block, request_time, document, deps);
+                        analyzed_blocks.push(analyzed_block);
                     }
-                    events
+                    analyzed_blocks
                 }
                 PrimaryExpr::ParenExpr(paren_expr) => {
                     self.analyze_expr(&paren_expr.expr, request_time, document, deps)
@@ -379,9 +383,15 @@ impl FullAnalyzer {
                 self.analyze_expr(&unary_expr.expr, request_time, document, deps)
             }
             Expr::Binary(binary_expr) => {
-                let mut events = self.analyze_expr(&binary_expr.lhs, request_time, document, deps);
-                events.extend(self.analyze_expr(&binary_expr.rhs, request_time, document, deps));
-                events
+                let mut analyzed_blocks =
+                    self.analyze_expr(&binary_expr.lhs, request_time, document, deps);
+                analyzed_blocks.extend(self.analyze_expr(
+                    &binary_expr.rhs,
+                    request_time,
+                    document,
+                    deps,
+                ));
+                analyzed_blocks
             }
         }
     }
