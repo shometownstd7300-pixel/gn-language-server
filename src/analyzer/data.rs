@@ -182,7 +182,7 @@ impl ShallowAnalyzedFile {
 #[derive(Default)]
 pub struct ShallowAnalyzedBlock<'i, 'p> {
     pub variables: Arc<AnalyzedVariableScope<'i, 'p>>,
-    pub templates: Arc<AnalyzedTemplateScope<'i>>,
+    pub templates: Arc<AnalyzedTemplateScope<'i, 'p>>,
     pub targets: Arc<AnalyzedTargetScope<'i, 'p>>,
 }
 
@@ -277,7 +277,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                         declare_args_stack.pop();
                     }
                     variables
-                        .ensure(assignment.name, || AnalyzedVariable {
+                        .ensure(assignment.primary_variable.as_str(), || AnalyzedVariable {
                             assignments: Default::default(),
                             is_args: !declare_args_stack.is_empty(),
                         })
@@ -285,7 +285,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                         .insert(
                             PathSpan {
                                 path: &assignment.document.path,
-                                span: assignment.variable_span,
+                                span: assignment.primary_variable,
                             },
                             assignment.clone(),
                         );
@@ -314,7 +314,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         variables
     }
 
-    pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateScope<'i> {
+    pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateScope<'i, 'p> {
         let mut templates = AnalyzedTemplateScope::new();
 
         // First pass: Collect all templates in the scope.
@@ -387,7 +387,7 @@ pub enum AnalyzedEvent<'i, 'p> {
     Import(AnalyzedImport),
     DeclareArgs(AnalyzedBlock<'i, 'p>),
     Assignment(AnalyzedAssignment<'i, 'p>),
-    Template(AnalyzedTemplate<'i>),
+    Template(AnalyzedTemplate<'i, 'p>),
     Target(AnalyzedTarget<'i, 'p>),
     NewScope(AnalyzedBlock<'i, 'p>),
 }
@@ -398,42 +398,36 @@ pub struct AnalyzedImport {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct AnalyzedAssignment<'i, 'p> {
-    pub name: &'i str,
-    pub comments: Comments<'i>,
-    pub statement: &'p Statement<'i>,
     pub document: &'i Document,
-    pub variable_span: Span<'i>,
+    pub statement: &'p Statement<'i>,
+    pub primary_variable: Span<'i>,
+    pub comments: Comments<'i>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Eq, PartialEq)]
+pub struct AnalyzedTemplate<'i, 'p> {
+    pub document: &'i Document,
+    pub call: &'p Call<'i>,
+    pub name: &'i str,
+    pub comments: Comments<'i>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct AnalyzedTarget<'i, 'p> {
+    pub document: &'i Document,
+    pub call: &'p Call<'i>,
+    pub name: &'i str,
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct AnalyzedVariable<'i, 'p> {
     pub assignments: HashMap<PathSpan<'i>, AnalyzedAssignment<'i, 'p>>,
     pub is_args: bool,
 }
 
-pub type AnalyzedVariableScope<'i, 'p> = Environment<'i, AnalyzedVariable<'i, 'p>>;
-
-#[derive(Clone, Eq, PartialEq)]
-pub struct AnalyzedTemplate<'i> {
-    pub name: &'i str,
-    pub comments: Comments<'i>,
-    pub document: &'i Document,
-    pub header: Span<'i>,
-    pub span: Span<'i>,
-}
-
-pub type AnalyzedTemplateScope<'i> = Environment<'i, AnalyzedTemplate<'i>>;
-
-#[derive(Clone, Eq, PartialEq)]
-pub struct AnalyzedTarget<'i, 'p> {
-    pub name: &'i str,
-    pub call: &'p Call<'i>,
-    pub document: &'i Document,
-    pub header: Span<'i>,
-    pub span: Span<'i>,
-}
-
+pub type AnalyzedTemplateScope<'i, 'p> = Environment<'i, AnalyzedTemplate<'i, 'p>>;
 pub type AnalyzedTargetScope<'i, 'p> = Environment<'i, AnalyzedTarget<'i, 'p>>;
+pub type AnalyzedVariableScope<'i, 'p> = Environment<'i, AnalyzedVariable<'i, 'p>>;
 
 #[derive(Clone, Eq, PartialEq)]
 pub enum AnalyzedLink<'i> {

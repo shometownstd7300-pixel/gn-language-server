@@ -38,7 +38,7 @@ use crate::{
         storage::{Document, DocumentStorage},
         utils::parse_simple_literal,
     },
-    parser::{parse, Block, Comments, LValue, Node, Statement},
+    parser::{parse, Block, Comments, LValue, Statement},
 };
 
 fn is_exported(name: &str) -> bool {
@@ -240,11 +240,10 @@ impl ShallowAnalyzer {
                                         span: identifier.span,
                                     },
                                     AnalyzedAssignment {
-                                        name: identifier.name,
-                                        comments: assignment.comments.clone(),
-                                        statement,
                                         document,
-                                        variable_span: identifier.span,
+                                        statement,
+                                        primary_variable: identifier.span,
+                                        comments: assignment.comments.clone(),
                                     },
                                 )]
                                 .into(),
@@ -279,11 +278,10 @@ impl ShallowAnalyzer {
                                 templates.insert(
                                     name,
                                     AnalyzedTemplate {
+                                        document,
+                                        call,
                                         name,
                                         comments: call.comments.clone(),
-                                        document,
-                                        header: call.function.span,
-                                        span: call.span,
                                     },
                                 );
                             }
@@ -330,11 +328,10 @@ impl ShallowAnalyzer {
                                                         span: string.span,
                                                     },
                                                     AnalyzedAssignment {
-                                                        name,
-                                                        comments: Comments::default(),
-                                                        statement,
                                                         document,
-                                                        variable_span: string.span,
+                                                        statement,
+                                                        primary_variable: string.span,
+                                                        comments: Comments::default(),
                                                     },
                                                 )]
                                                 .into(),
@@ -355,11 +352,9 @@ impl ShallowAnalyzer {
                             targets.insert(
                                 name,
                                 AnalyzedTarget {
-                                    name,
-                                    call,
                                     document,
-                                    header: call.args[0].span(),
-                                    span: call.span,
+                                    call,
+                                    name,
                                 },
                             );
                         }

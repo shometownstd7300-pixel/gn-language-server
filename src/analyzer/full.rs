@@ -21,6 +21,7 @@ use std::{
 };
 
 use either::Either;
+use pest::Span;
 
 use crate::{
     analyzer::{
@@ -175,11 +176,10 @@ impl FullAnalyzer {
                         LValue::ScopeAccess(scope_access) => &scope_access.scope,
                     };
                     events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
-                        name: identifier.name,
-                        comments: assignment.comments.clone(),
-                        statement,
                         document,
-                        variable_span: identifier.span,
+                        statement,
+                        primary_variable: identifier.span,
+                        comments: assignment.comments.clone(),
                     }));
                     events.extend(
                         self.analyze_expr(
@@ -215,11 +215,10 @@ impl FullAnalyzer {
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
                             events.push(AnalyzedEvent::Template(AnalyzedTemplate {
+                                document,
+                                call,
                                 name,
                                 comments: call.comments.clone(),
-                                document,
-                                header: call.function.span,
-                                span: call.span,
                             }));
                         }
                         if let Some(block) = &call.block {
@@ -267,13 +266,18 @@ impl FullAnalyzer {
                             })
                         {
                             events.extend(strings.into_iter().filter_map(|string| {
-                                parse_simple_literal(string.raw_value).map(|name| {
+                                parse_simple_literal(string.raw_value).map(|_| {
+                                    let primary_variable = Span::new(
+                                        string.span.get_input(),
+                                        string.span.start() + 1,
+                                        string.span.end() - 1,
+                                    )
+                                    .unwrap();
                                     AnalyzedEvent::Assignment(AnalyzedAssignment {
-                                        name,
-                                        comments: Comments::default(),
-                                        statement,
                                         document,
-                                        variable_span: string.span,
+                                        statement,
+                                        primary_variable,
+                                        comments: Comments::default(),
                                     })
                                 })
                             }));
@@ -286,11 +290,9 @@ impl FullAnalyzer {
                             .and_then(|s| parse_simple_literal(s.raw_value))
                         {
                             events.push(AnalyzedEvent::Target(AnalyzedTarget {
-                                name,
-                                call,
                                 document,
-                                header: call.args[0].span(),
-                                span: call.span,
+                                call,
+                                name,
                             }));
                         }
                         if let Some(block) = &call.block {

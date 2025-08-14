@@ -82,7 +82,10 @@ pub async fn goto_definition(
         // Return the self link to fall back to finding references.
         return Ok(Some(GotoDefinitionResponse::Scalar(Location {
             uri: params.text_document_position_params.text_document.uri,
-            range: current_file.document.line_index.range(target.header),
+            range: current_file
+                .document
+                .line_index
+                .range(target.call.args[0].span()),
         })));
     }
 
@@ -102,8 +105,11 @@ pub async fn goto_definition(
             .map(|template| LocationLink {
                 origin_selection_range: Some(current_file.document.line_index.range(ident.span)),
                 target_uri: Url::from_file_path(&template.document.path).unwrap(),
-                target_range: template.document.line_index.range(template.span),
-                target_selection_range: template.document.line_index.range(template.header),
+                target_range: template.document.line_index.range(template.call.span),
+                target_selection_range: template
+                    .document
+                    .line_index
+                    .range(template.call.function.span),
             }),
     );
 
@@ -121,7 +127,7 @@ pub async fn goto_definition(
                 target_selection_range: assignment
                     .document
                     .line_index
-                    .range(assignment.variable_span),
+                    .range(assignment.primary_variable),
             }
         }))
     }

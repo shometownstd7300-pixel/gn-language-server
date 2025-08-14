@@ -44,9 +44,9 @@ pub fn lookup_target_name_string_at(
     position: Position,
 ) -> Option<&AnalyzedTarget> {
     let offset = file.document.line_index.offset(position)?;
-    file.analyzed_root
-        .targets()
-        .find(|target| target.header.start() < offset && offset < target.header.end())
+    file.analyzed_root.targets().find(|target| {
+        target.call.function.span.start() < offset && offset < target.call.function.span.end()
+    })
 }
 
 pub fn find_target<'a>(
@@ -58,7 +58,7 @@ pub fn find_target<'a>(
         .targets
         .locals()
         .values()
-        .sorted_by_key(|target| (&target.document.path, target.span.start()))
+        .sorted_by_key(|target| (&target.document.path, target.call.span.start()))
         .collect();
 
     // Try target name prefixes.
@@ -111,7 +111,7 @@ pub fn format_variable_help(variable: &AnalyzedVariable, workspace_root: &Path) 
             _ => unreachable!(),
         }
     } else {
-        format!("{} = ...", first_assignment.name)
+        format!("{} = ...", first_assignment.primary_variable.as_str())
     };
 
     let mut paragraphs = vec![format!("```gn\n{snippet}\n```")];
@@ -163,7 +163,7 @@ pub fn format_template_help(template: &AnalyzedTemplate, workspace_root: &Path) 
     let position = template
         .document
         .line_index
-        .position(template.header.start());
+        .position(template.call.function.span.start());
     paragraphs.push(format!(
         "Defined at [{}:{}:{}]({}#L{},{})",
         format_path(&template.document.path, workspace_root),

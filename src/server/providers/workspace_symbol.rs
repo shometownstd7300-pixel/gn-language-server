@@ -112,7 +112,7 @@ fn extract_symbols(file: &ShallowAnalyzedFile, query: &str) -> Vec<SymbolInforma
             deprecated: None,
             location: Location {
                 uri: uri.clone(),
-                range: template.document.line_index.range(template.span),
+                range: template.document.line_index.range(template.call.span),
             },
             container_name: None,
         });
