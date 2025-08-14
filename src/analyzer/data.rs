@@ -49,18 +49,18 @@ impl WorkspaceContext {
 }
 
 #[derive(Clone)]
-pub struct Scope<'i, T> {
-    imports: Vec<Arc<Scope<'i, T>>>,
+pub struct Environment<'i, T> {
+    imports: Vec<Arc<Environment<'i, T>>>,
     locals: HashMap<&'i str, T>,
 }
 
-impl<T> Default for Scope<'_, T> {
+impl<T> Default for Environment<'_, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'i, T> Scope<'i, T> {
+impl<'i, T> Environment<'i, T> {
     pub fn new() -> Self {
         Self {
             imports: Vec::new(),
@@ -78,7 +78,7 @@ impl<'i, T> Scope<'i, T> {
             .or_else(|| self.imports.iter().find_map(|import| import.get(name)))
     }
 
-    pub fn import(&mut self, other: &Arc<Scope<'i, T>>) {
+    pub fn import(&mut self, other: &Arc<Environment<'i, T>>) {
         self.imports.push(Arc::clone(other));
     }
 
@@ -90,7 +90,7 @@ impl<'i, T> Scope<'i, T> {
         self.locals.entry(name).or_insert_with(f)
     }
 
-    pub fn merge(&mut self, other: Scope<'i, T>) {
+    pub fn merge(&mut self, other: Environment<'i, T>) {
         for (name, item) in other.locals {
             self.insert(name, item);
         }
@@ -98,7 +98,7 @@ impl<'i, T> Scope<'i, T> {
     }
 }
 
-impl<'i, T> Scope<'i, T>
+impl<'i, T> Environment<'i, T>
 where
     T: Clone,
 {
@@ -411,7 +411,7 @@ pub struct AnalyzedVariable<'i, 'p> {
     pub is_args: bool,
 }
 
-pub type AnalyzedVariableScope<'i, 'p> = Scope<'i, AnalyzedVariable<'i, 'p>>;
+pub type AnalyzedVariableScope<'i, 'p> = Environment<'i, AnalyzedVariable<'i, 'p>>;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct AnalyzedTemplate<'i> {
@@ -422,7 +422,7 @@ pub struct AnalyzedTemplate<'i> {
     pub span: Span<'i>,
 }
 
-pub type AnalyzedTemplateScope<'i> = Scope<'i, AnalyzedTemplate<'i>>;
+pub type AnalyzedTemplateScope<'i> = Environment<'i, AnalyzedTemplate<'i>>;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct AnalyzedTarget<'i, 'p> {
@@ -433,7 +433,7 @@ pub struct AnalyzedTarget<'i, 'p> {
     pub span: Span<'i>,
 }
 
-pub type AnalyzedTargetScope<'i, 'p> = Scope<'i, AnalyzedTarget<'i, 'p>>;
+pub type AnalyzedTargetScope<'i, 'p> = Environment<'i, AnalyzedTarget<'i, 'p>>;
 
 #[derive(Clone, Eq, PartialEq)]
 pub enum AnalyzedLink<'i> {
