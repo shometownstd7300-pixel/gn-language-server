@@ -29,6 +29,12 @@ use crate::{
     parser::{parse, Block, Call, Comments, Node, Statement},
 };
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct PathSpan<'i> {
+    pub path: &'i Path,
+    pub span: Span<'i>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceContext {
     pub root: PathBuf,
@@ -277,9 +283,9 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                         })
                         .assignments
                         .insert(
-                            AnalyzedVariableLocation {
+                            PathSpan {
                                 path: &assignment.document.path,
-                                start: assignment.variable_span.start(),
+                                span: assignment.variable_span,
                             },
                             assignment.clone(),
                         );
@@ -399,15 +405,9 @@ pub struct AnalyzedAssignment<'i, 'p> {
     pub variable_span: Span<'i>,
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub struct AnalyzedVariableLocation<'i> {
-    pub path: &'i Path,
-    pub start: usize,
-}
-
 #[derive(Clone, Default)]
 pub struct AnalyzedVariable<'i, 'p> {
-    pub assignments: HashMap<AnalyzedVariableLocation<'i>, AnalyzedAssignment<'i, 'p>>,
+    pub assignments: HashMap<PathSpan<'i>, AnalyzedAssignment<'i, 'p>>,
     pub is_args: bool,
 }
 

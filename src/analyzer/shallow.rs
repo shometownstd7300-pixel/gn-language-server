@@ -27,8 +27,8 @@ use crate::{
         cache::AnalysisNode,
         data::{
             AnalyzedAssignment, AnalyzedTarget, AnalyzedTargetScope, AnalyzedTemplate,
-            AnalyzedTemplateScope, AnalyzedVariable, AnalyzedVariableLocation,
-            AnalyzedVariableScope, ShallowAnalyzedBlock, ShallowAnalyzedFile, WorkspaceContext,
+            AnalyzedTemplateScope, AnalyzedVariable, AnalyzedVariableScope, PathSpan,
+            ShallowAnalyzedBlock, ShallowAnalyzedFile, WorkspaceContext,
         },
         links::collect_links,
         AnalyzedLink,
@@ -235,9 +235,9 @@ impl ShallowAnalyzer {
                             identifier.name,
                             AnalyzedVariable {
                                 assignments: [(
-                                    AnalyzedVariableLocation {
+                                    PathSpan {
                                         path: &document.path,
-                                        start: identifier.span.start(),
+                                        span: identifier.span,
                                     },
                                     AnalyzedAssignment {
                                         name: identifier.name,
@@ -325,9 +325,9 @@ impl ShallowAnalyzer {
                                             name,
                                             AnalyzedVariable {
                                                 assignments: [(
-                                                    AnalyzedVariableLocation {
+                                                    PathSpan {
                                                         path: &document.path,
-                                                        start: string.span.start(),
+                                                        span: string.span,
                                                     },
                                                     AnalyzedAssignment {
                                                         name,
