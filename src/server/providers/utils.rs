@@ -14,15 +14,14 @@
 
 use std::path::{Path, PathBuf};
 
+use either::Either;
 use itertools::Itertools;
 use tower_lsp::lsp_types::{Position, TextDocumentIdentifier, Url};
 
 use crate::{
-    analyzer::{
-        AnalyzedFile, AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable, ShallowAnalyzedFile,
-    },
+    analyzer::{AnalyzedFile, ShallowAnalyzedFile, Target, Template, Variable},
     common::error::{Error, Result},
-    parser::{Identifier, Node, Statement},
+    parser::{Identifier, Node},
 };
 
 pub fn get_text_document_path(text_document: &TextDocumentIdentifier) -> Result<PathBuf> {
@@ -39,20 +38,17 @@ pub fn lookup_identifier_at(file: &AnalyzedFile, position: Position) -> Option<&
         .find(|ident| ident.span.start() <= offset && offset <= ident.span.end())
 }
 
-pub fn lookup_target_name_string_at(
-    file: &AnalyzedFile,
-    position: Position,
-) -> Option<&AnalyzedTarget> {
+pub fn lookup_target_name_string_at(file: &AnalyzedFile, position: Position) -> Option<Target> {
     let offset = file.document.line_index.offset(position)?;
     file.analyzed_root.targets().find(|target| {
-        target.call.function.span.start() < offset && offset < target.call.function.span.end()
+        target.call.args[0].span().start() <= offset && offset <= target.call.args[0].span().end()
     })
 }
 
 pub fn find_target<'a>(
     file: &'a ShallowAnalyzedFile,
     name: &str,
-) -> Option<&'a AnalyzedTarget<'static, 'static>> {
+) -> Option<&'a Target<'static, 'static>> {
     let targets: Vec<_> = file
         .analyzed_root
         .targets
@@ -79,18 +75,24 @@ pub fn format_path(path: &Path, workspace_root: &Path) -> String {
     }
 }
 
-pub fn format_variable_help(variable: &AnalyzedVariable, workspace_root: &Path) -> Vec<String> {
+pub fn format_variable_help(variable: &Variable, workspace_root: &Path) -> Vec<String> {
     let first_assignment = variable
         .assignments
         .values()
-        .sorted_by_key(|a| (&a.document.path, a.statement.span().start()))
+        .sorted_by_key(|a| {
+            let span = match &a.assignment_or_call {
+                either::Either::Left(assignment) => assignment.span,
+                either::Either::Right(call) => call.span,
+            };
+            (&a.document.path, span.start())
+        })
         .next()
         .unwrap();
     let single_assignment = variable.assignments.len() == 1;
 
     let snippet = if single_assignment {
-        match first_assignment.statement {
-            Statement::Assignment(assignment) => {
+        match first_assignment.assignment_or_call {
+            Either::Left(assignment) => {
                 let raw_value = assignment.rvalue.span().as_str();
                 let display_value = if raw_value.lines().count() <= 5 {
                     raw_value
@@ -104,11 +106,10 @@ pub fn format_variable_help(variable: &AnalyzedVariable, workspace_root: &Path) 
                     display_value
                 )
             }
-            Statement::Call(call) => {
+            Either::Right(call) => {
                 assert_eq!(call.function.name, "forward_variables_from");
                 call.span.as_str().to_string()
             }
-            _ => unreachable!(),
         }
     } else {
         format!("{} = ...", first_assignment.primary_variable.as_str())
@@ -117,18 +118,17 @@ pub fn format_variable_help(variable: &AnalyzedVariable, workspace_root: &Path) 
     let mut paragraphs = vec![format!("```gn\n{snippet}\n```")];
 
     if single_assignment {
-        if let Statement::Assignment(assignment) = first_assignment.statement {
-            paragraphs.push(format!(
-                "```text\n{}\n```",
-                assignment.comments.to_string().trim()
-            ));
-        };
+        paragraphs.push(format!(
+            "```text\n{}\n```",
+            first_assignment.comments.to_string().trim()
+        ));
     }
 
-    let position = first_assignment
-        .document
-        .line_index
-        .position(first_assignment.statement.span().start());
+    let span = match &first_assignment.assignment_or_call {
+        Either::Left(assignment) => assignment.span,
+        Either::Right(call) => call.span,
+    };
+    let position = first_assignment.document.line_index.position(span.start());
     paragraphs.push(if single_assignment {
         format!(
             "Defined at [{}:{}:{}]({}#L{},{})",
@@ -149,7 +149,7 @@ pub fn format_variable_help(variable: &AnalyzedVariable, workspace_root: &Path) 
     paragraphs
 }
 
-pub fn format_template_help(template: &AnalyzedTemplate, workspace_root: &Path) -> Vec<String> {
+pub fn format_template_help(template: &Template, workspace_root: &Path) -> Vec<String> {
     let mut paragraphs = vec![format!(
         "```gn\ntemplate(\"{}\") {{ ... }}\n```",
         template.name

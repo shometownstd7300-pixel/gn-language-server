@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use either::Either;
 use tower_lsp::lsp_types::{
     GotoDefinitionParams, GotoDefinitionResponse, Location, LocationLink, Position, Range, Url,
 };
@@ -117,13 +118,14 @@ pub async fn goto_definition(
     let variables = current_file.variables_at(ident.span.start());
     if let Some(variable) = variables.get(ident.name) {
         links.extend(variable.assignments.values().map(|assignment| {
+            let span = match &assignment.assignment_or_call {
+                Either::Left(assignment) => assignment.span,
+                Either::Right(call) => call.span,
+            };
             LocationLink {
                 origin_selection_range: Some(current_file.document.line_index.range(ident.span)),
                 target_uri: Url::from_file_path(&assignment.document.path).unwrap(),
-                target_range: assignment
-                    .document
-                    .line_index
-                    .range(assignment.statement.span()),
+                target_range: assignment.document.line_index.range(span),
                 target_selection_range: assignment
                     .document
                     .line_index

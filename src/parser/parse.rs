@@ -304,7 +304,7 @@ fn convert_condition(pair: Pair<Rule>) -> Condition {
             Some(Either::Left(Box::new(convert_condition(pair))))
         }
         Some(pair) if matches!(pair.as_rule(), Rule::block) => {
-            Some(Either::Right(convert_block(pair)))
+            Some(Either::Right(Box::new(convert_block(pair))))
         }
         Some(pair) => unreachable!("{:?}", pair),
         None => None,

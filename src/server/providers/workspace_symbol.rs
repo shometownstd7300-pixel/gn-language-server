@@ -14,11 +14,10 @@
 
 use std::collections::HashSet;
 
+use either::Either;
 use tower_lsp::lsp_types::{Location, SymbolInformation, SymbolKind, Url, WorkspaceSymbolParams};
 
-use crate::{
-    analyzer::ShallowAnalyzedFile, common::error::Result, parser::Node, server::RequestContext,
-};
+use crate::{analyzer::ShallowAnalyzedFile, common::error::Result, server::RequestContext};
 
 pub async fn workspace_symbol(
     context: &RequestContext,
@@ -80,6 +79,10 @@ fn extract_symbols(file: &ShallowAnalyzedFile, query: &str) -> Vec<SymbolInforma
             continue;
         }
         if let Some(assignment) = variable.assignments.values().next() {
+            let span = match assignment.assignment_or_call {
+                Either::Left(assignment) => assignment.span,
+                Either::Right(call) => call.span,
+            };
             symbols.push(SymbolInformation {
                 name: name.to_string(),
                 kind: if variable.is_args {
@@ -91,10 +94,7 @@ fn extract_symbols(file: &ShallowAnalyzedFile, query: &str) -> Vec<SymbolInforma
                 deprecated: None,
                 location: Location {
                     uri: uri.clone(),
-                    range: assignment
-                        .document
-                        .line_index
-                        .range(assignment.statement.span()),
+                    range: assignment.document.line_index.range(span),
                 },
                 container_name: None,
             });

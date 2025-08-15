@@ -26,9 +26,8 @@ use crate::{
     analyzer::{
         cache::AnalysisNode,
         data::{
-            AnalyzedAssignment, AnalyzedTarget, AnalyzedTargetScope, AnalyzedTemplate,
-            AnalyzedTemplateScope, AnalyzedVariable, AnalyzedVariableScope, PathSpan,
-            ShallowAnalyzedBlock, ShallowAnalyzedFile, WorkspaceContext,
+            PathSpan, ShallowAnalyzedBlock, ShallowAnalyzedFile, Target, TargetScope, Template,
+            TemplateScope, Variable, VariableAssignment, VariableScope, WorkspaceContext,
         },
         links::collect_links,
         AnalyzedLink,
@@ -218,9 +217,9 @@ impl ShallowAnalyzer {
         deps: &mut Vec<Arc<AnalysisNode>>,
         visiting: &mut Vec<PathBuf>,
     ) -> ShallowAnalyzedBlock<'i, 'p> {
-        let mut variables = AnalyzedVariableScope::new();
-        let mut templates = AnalyzedTemplateScope::new();
-        let mut targets = AnalyzedTargetScope::new();
+        let mut variables = VariableScope::new();
+        let mut templates = TemplateScope::new();
+        let mut targets = TargetScope::new();
 
         for statement in &block.statements {
             match statement {
@@ -231,33 +230,26 @@ impl ShallowAnalyzer {
                         LValue::ScopeAccess(scope_access) => &scope_access.scope,
                     };
                     if is_exported(identifier.name) {
-                        variables.insert(
-                            identifier.name,
-                            AnalyzedVariable {
-                                assignments: [(
-                                    PathSpan {
-                                        path: &document.path,
-                                        span: identifier.span,
-                                    },
-                                    AnalyzedAssignment {
-                                        document,
-                                        statement,
-                                        primary_variable: identifier.span,
-                                        comments: assignment.comments.clone(),
-                                    },
-                                )]
-                                .into(),
-                                is_args: declare_args,
-                            },
-                        );
+                        variables
+                            .ensure(identifier.name, || Variable::new(declare_args))
+                            .assignments
+                            .insert(
+                                PathSpan {
+                                    path: &document.path,
+                                    span: identifier.span,
+                                },
+                                VariableAssignment {
+                                    document,
+                                    assignment_or_call: Either::Left(assignment),
+                                    primary_variable: identifier.span,
+                                    comments: assignment.comments.clone(),
+                                },
+                            );
                     }
                 }
                 Statement::Call(call) => match call.function.name {
                     IMPORT => {
-                        if let Some(name) = call
-                            .only_arg()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        if let Some(name) = call.only_arg().and_then(|expr| expr.as_simple_string())
                         {
                             let path = self
                                 .context
@@ -269,15 +261,12 @@ impl ShallowAnalyzer {
                         }
                     }
                     TEMPLATE => {
-                        if let Some(name) = call
-                            .only_arg()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        if let Some(name) = call.only_arg().and_then(|expr| expr.as_simple_string())
                         {
                             if is_exported(name) {
                                 templates.insert(
                                     name,
-                                    AnalyzedTemplate {
+                                    Template {
                                         document,
                                         call,
                                         name,
@@ -319,39 +308,32 @@ impl ShallowAnalyzer {
                             for string in strings {
                                 if let Some(name) = parse_simple_literal(string.raw_value) {
                                     if is_exported(name) {
-                                        variables.insert(
-                                            name,
-                                            AnalyzedVariable {
-                                                assignments: [(
-                                                    PathSpan {
-                                                        path: &document.path,
-                                                        span: string.span,
-                                                    },
-                                                    AnalyzedAssignment {
-                                                        document,
-                                                        statement,
-                                                        primary_variable: string.span,
-                                                        comments: Comments::default(),
-                                                    },
-                                                )]
-                                                .into(),
-                                                is_args: declare_args,
-                                            },
-                                        );
+                                        variables
+                                            .ensure(name, || Variable::new(declare_args))
+                                            .assignments
+                                            .insert(
+                                                PathSpan {
+                                                    path: &document.path,
+                                                    span: string.span,
+                                                },
+                                                VariableAssignment {
+                                                    document,
+                                                    assignment_or_call: Either::Right(call),
+                                                    primary_variable: string.span,
+                                                    comments: Comments::default(),
+                                                },
+                                            );
                                     }
                                 }
                             }
                         }
                     }
                     _ => {
-                        if let Some(name) = call
-                            .only_arg()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
+                        if let Some(name) = call.only_arg().and_then(|expr| expr.as_simple_string())
                         {
                             targets.insert(
                                 name,
-                                AnalyzedTarget {
+                                Target {
                                     document,
                                     call,
                                     name,

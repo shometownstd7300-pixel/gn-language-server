@@ -53,7 +53,7 @@ pub fn find_gn_files(root: &Path) -> impl Iterator<Item = PathBuf> {
     })
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LineIndex<'i> {
     input: &'i str,
     lines: Vec<&'i str>,

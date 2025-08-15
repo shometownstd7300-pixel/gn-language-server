@@ -28,8 +28,8 @@ use crate::{
 
 fn get_overlapping_targets<'i>(root: &AnalyzedBlock<'i, '_>, prefix: &str) -> Vec<&'i str> {
     root.targets()
+        .filter(|target| target.name.len() > prefix.len() && target.name.starts_with(prefix))
         .map(|target| target.name)
-        .filter(|name| name.len() > prefix.len() && name.starts_with(prefix))
         .collect()
 }
 

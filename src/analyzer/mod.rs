@@ -21,8 +21,8 @@ use std::{
 };
 
 pub use data::{
-    AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedImport, AnalyzedLink,
-    AnalyzedTarget, AnalyzedTemplate, AnalyzedVariable, ShallowAnalyzedFile,
+    AnalyzedAssignment, AnalyzedBlock, AnalyzedFile, AnalyzedImport, AnalyzedLink, AnalyzedTarget,
+    AnalyzedTemplate, ShallowAnalyzedFile, Target, Template, Variable,
 };
 
 use crate::{

@@ -26,19 +26,22 @@ use pest::Span;
 use crate::{
     analyzer::{
         cache::AnalysisNode,
+        data::{
+            AnalyzedCondition, AnalyzedDeclareArgs, AnalyzedForeach, AnalyzedForwardVariablesFrom,
+            AnalyzedGenericCall, AnalyzedStatement, SyntheticImport,
+        },
         diagnostics::collect_diagnostics,
         links::collect_links,
         shallow::{ShallowAnalysisSnapshot, ShallowAnalyzer},
         symbols::collect_symbols,
-        AnalyzedAssignment, AnalyzedBlock, AnalyzedEvent, AnalyzedFile, AnalyzedImport,
-        AnalyzedLink, AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
+        AnalyzedAssignment, AnalyzedBlock, AnalyzedFile, AnalyzedImport, AnalyzedLink,
+        AnalyzedTarget, AnalyzedTemplate, WorkspaceContext,
     },
     common::{
         builtins::{DECLARE_ARGS, FOREACH, FORWARD_VARIABLES_FROM, IMPORT, SET_DEFAULTS, TEMPLATE},
         storage::{Document, DocumentStorage},
-        utils::parse_simple_literal,
     },
-    parser::{parse, Block, Comments, Expr, LValue, Node, PrimaryExpr, Statement},
+    parser::{parse, Block, Call, Condition, Expr, LValue, Node, PrimaryExpr, Statement},
 };
 
 pub struct FullAnalyzer {
@@ -124,11 +127,12 @@ impl FullAnalyzer {
         let dot_gn_file =
             self.shallow_analyzer
                 .analyze(&self.context.build_config, request_time, &mut snapshot);
-        analyzed_root.events.insert(
+        analyzed_root.statements.insert(
             0,
-            AnalyzedEvent::Import(AnalyzedImport {
+            AnalyzedStatement::SyntheticImport(Box::new(SyntheticImport {
                 file: dot_gn_file.clone(),
-            }),
+                span: Span::new(&document.data, 0, 0).unwrap(),
+            })),
         );
         deps.push(dot_gn_file.node.clone());
 
@@ -165,195 +169,222 @@ impl FullAnalyzer {
         snapshot: &mut ShallowAnalysisSnapshot,
         deps: &mut Vec<Arc<AnalysisNode>>,
     ) -> AnalyzedBlock<'i, 'p> {
-        let mut events: Vec<AnalyzedEvent> = Vec::new();
+        let mut statements: Vec<AnalyzedStatement> = Vec::new();
 
         for statement in &block.statements {
             match statement {
                 Statement::Assignment(assignment) => {
-                    let identifier = match &assignment.lvalue {
-                        LValue::Identifier(identifier) => identifier,
-                        LValue::ArrayAccess(array_access) => &array_access.array,
-                        LValue::ScopeAccess(scope_access) => &scope_access.scope,
-                    };
-                    events.push(AnalyzedEvent::Assignment(AnalyzedAssignment {
-                        document,
-                        statement,
-                        primary_variable: identifier.span,
-                        comments: assignment.comments.clone(),
-                    }));
-                    events.extend(
-                        self.analyze_expr(
-                            &assignment.rvalue,
-                            document,
-                            request_time,
-                            snapshot,
-                            deps,
-                        )
-                        .into_iter()
-                        .map(AnalyzedEvent::NewScope),
-                    );
-                }
-                Statement::Call(call) => match call.function.name {
-                    IMPORT => {
-                        if let Some(name) = call
-                            .only_arg()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
-                        {
-                            let path = self
-                                .context
-                                .resolve_path(name, document.path.parent().unwrap());
-                            let file = self.shallow_analyzer.analyze(&path, request_time, snapshot);
-                            deps.push(file.node.clone());
-                            events.push(AnalyzedEvent::Import(AnalyzedImport { file }));
-                        }
-                    }
-                    TEMPLATE => {
-                        if let Some(name) = call
-                            .only_arg()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
-                        {
-                            events.push(AnalyzedEvent::Template(AnalyzedTemplate {
-                                document,
-                                call,
-                                name,
-                                comments: call.comments.clone(),
-                            }));
-                        }
-                        if let Some(block) = &call.block {
-                            events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                block,
-                                document,
-                                request_time,
-                                snapshot,
-                                deps,
-                            )));
-                        }
-                    }
-                    DECLARE_ARGS => {
-                        if let Some(block) = &call.block {
-                            let analyzed_root =
-                                self.analyze_block(block, document, request_time, snapshot, deps);
-                            events.push(AnalyzedEvent::DeclareArgs(analyzed_root));
-                        }
-                    }
-                    FOREACH => {
-                        if let Some(block) = &call.block {
-                            events.extend(
-                                self.analyze_block(block, document, request_time, snapshot, deps)
-                                    .events,
-                            );
-                        }
-                    }
-                    SET_DEFAULTS => {
-                        if let Some(block) = &call.block {
-                            let analyzed_root =
-                                self.analyze_block(block, document, request_time, snapshot, deps);
-                            events.push(AnalyzedEvent::NewScope(analyzed_root));
-                        }
-                    }
-                    FORWARD_VARIABLES_FROM => {
-                        if let Some(strings) = call
-                            .args
-                            .get(1)
-                            .and_then(|expr| expr.as_primary_list())
-                            .map(|list| {
-                                list.values
-                                    .iter()
-                                    .filter_map(|expr| expr.as_primary_string())
-                                    .collect::<Vec<_>>()
-                            })
-                        {
-                            events.extend(strings.into_iter().filter_map(|string| {
-                                parse_simple_literal(string.raw_value).map(|_| {
-                                    let primary_variable = Span::new(
-                                        string.span.get_input(),
-                                        string.span.start() + 1,
-                                        string.span.end() - 1,
-                                    )
-                                    .unwrap();
-                                    AnalyzedEvent::Assignment(AnalyzedAssignment {
-                                        document,
-                                        statement,
-                                        primary_variable,
-                                        comments: Comments::default(),
-                                    })
-                                })
-                            }));
-                        }
-                    }
-                    _ => {
-                        if let Some(name) = call
-                            .only_arg()
-                            .and_then(|expr| expr.as_primary_string())
-                            .and_then(|s| parse_simple_literal(s.raw_value))
-                        {
-                            events.push(AnalyzedEvent::Target(AnalyzedTarget {
-                                document,
-                                call,
-                                name,
-                            }));
-                        }
-                        if let Some(block) = &call.block {
-                            events.push(AnalyzedEvent::NewScope(self.analyze_block(
-                                block,
-                                document,
-                                request_time,
-                                snapshot,
-                                deps,
-                            )));
-                        }
-                    }
-                },
-                Statement::Condition(condition) => {
-                    let mut condition_blocks = Vec::new();
-                    let mut current_condition = condition;
-                    loop {
-                        events.extend(
+                    let (identifier, mut expr_scopes) = match &assignment.lvalue {
+                        LValue::Identifier(identifier) => (identifier.as_ref(), Vec::new()),
+                        LValue::ArrayAccess(array_access) => (
+                            &array_access.array,
                             self.analyze_expr(
-                                &current_condition.condition,
+                                &array_access.index,
                                 document,
                                 request_time,
                                 snapshot,
                                 deps,
-                            )
-                            .into_iter()
-                            .map(AnalyzedEvent::NewScope),
-                        );
-                        condition_blocks.push(self.analyze_block(
-                            &current_condition.then_block,
-                            document,
-                            request_time,
-                            snapshot,
-                            deps,
-                        ));
-                        match &current_condition.else_block {
-                            None => break,
-                            Some(Either::Left(next_condition)) => {
-                                current_condition = next_condition;
-                            }
-                            Some(Either::Right(block)) => {
-                                condition_blocks.push(self.analyze_block(
-                                    block,
-                                    document,
-                                    request_time,
-                                    snapshot,
-                                    deps,
-                                ));
-                                break;
-                            }
-                        }
-                    }
-                    events.push(AnalyzedEvent::Conditions(condition_blocks));
+                            ),
+                        ),
+                        LValue::ScopeAccess(scope_access) => (&scope_access.scope, Vec::new()),
+                    };
+                    expr_scopes.extend(self.analyze_expr(
+                        &assignment.rvalue,
+                        document,
+                        request_time,
+                        snapshot,
+                        deps,
+                    ));
+                    statements.push(AnalyzedStatement::Assignment(Box::new(
+                        AnalyzedAssignment {
+                            assignment,
+                            primary_variable: identifier.span,
+                            comments: assignment.comments.clone(),
+                            expr_scopes,
+                        },
+                    )));
+                }
+                Statement::Call(call) => {
+                    statements.push(self.analyze_call(
+                        call,
+                        document,
+                        request_time,
+                        snapshot,
+                        deps,
+                    ));
+                }
+                Statement::Condition(condition) => {
+                    statements.push(AnalyzedStatement::Conditions(Box::new(
+                        self.analyze_condition(condition, document, request_time, snapshot, deps),
+                    )));
                 }
                 Statement::Error(_) => {}
             }
         }
 
         AnalyzedBlock {
-            events,
+            statements,
+            document,
             span: block.span,
+        }
+    }
+
+    fn analyze_call<'i, 'p>(
+        &self,
+        call: &'p Call<'i>,
+        document: &'i Document,
+        request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
+        deps: &mut Vec<Arc<AnalysisNode>>,
+    ) -> AnalyzedStatement<'i, 'p> {
+        let body_block = call
+            .block
+            .as_ref()
+            .map(|block| self.analyze_block(block, document, request_time, snapshot, deps));
+
+        let body_block = match (call.function.name, body_block) {
+            (DECLARE_ARGS, Some(body_block)) => {
+                return AnalyzedStatement::DeclareArgs(Box::new(AnalyzedDeclareArgs {
+                    call,
+                    body_block,
+                }));
+            }
+            (FOREACH, Some(body_block)) => {
+                if call.args.len() == 2 {
+                    if let Some(loop_variable) = call.args[0].as_identifier() {
+                        let expr_scopes = call
+                            .args
+                            .iter()
+                            .skip(1)
+                            .flat_map(|expr| {
+                                self.analyze_expr(expr, document, request_time, snapshot, deps)
+                            })
+                            .collect();
+                        return AnalyzedStatement::Foreach(Box::new(AnalyzedForeach {
+                            call,
+                            loop_variable,
+                            expr_scopes,
+                            body_block,
+                        }));
+                    }
+                }
+                Some(body_block)
+            }
+            (FORWARD_VARIABLES_FROM, None) => {
+                if call.args.len() == 2 || call.args.len() == 3 {
+                    let expr_scopes = call
+                        .args
+                        .iter()
+                        .flat_map(|expr| {
+                            self.analyze_expr(expr, document, request_time, snapshot, deps)
+                        })
+                        .collect();
+                    return AnalyzedStatement::ForwardVariablesFrom(Box::new(
+                        AnalyzedForwardVariablesFrom {
+                            call,
+                            expr_scopes,
+                            includes: &call.args[1],
+                            excludes: call.args.get(2),
+                        },
+                    ));
+                }
+                None
+            }
+            (IMPORT, None) => {
+                if let Some(name) = call.only_arg().and_then(|expr| expr.as_simple_string()) {
+                    let path = self
+                        .context
+                        .resolve_path(name, document.path.parent().unwrap());
+                    let file = self.shallow_analyzer.analyze(&path, request_time, snapshot);
+                    deps.push(file.node.clone());
+                    return AnalyzedStatement::Import(Box::new(AnalyzedImport { call, file }));
+                }
+                None
+            }
+            (TEMPLATE, Some(body_block)) => {
+                if let Some(name) = call.only_arg() {
+                    let expr_scopes = call
+                        .args
+                        .iter()
+                        .flat_map(|expr| {
+                            self.analyze_expr(expr, document, request_time, snapshot, deps)
+                        })
+                        .collect();
+                    return AnalyzedStatement::Template(Box::new(AnalyzedTemplate {
+                        call,
+                        name,
+                        comments: call.comments.clone(),
+                        expr_scopes,
+                        body_block,
+                    }));
+                }
+                Some(body_block)
+            }
+            (name, Some(body_block)) if name != SET_DEFAULTS => {
+                if let Some(name) = call.only_arg() {
+                    let expr_scopes = call
+                        .args
+                        .iter()
+                        .flat_map(|expr| {
+                            self.analyze_expr(expr, document, request_time, snapshot, deps)
+                        })
+                        .collect();
+                    return AnalyzedStatement::Target(Box::new(AnalyzedTarget {
+                        call,
+                        name,
+                        expr_scopes,
+                        body_block,
+                    }));
+                }
+                Some(body_block)
+            }
+            (_, body_block) => body_block,
+        };
+
+        let expr_scopes = call
+            .args
+            .iter()
+            .flat_map(|expr| self.analyze_expr(expr, document, request_time, snapshot, deps))
+            .collect();
+        AnalyzedStatement::GenericCall(Box::new(AnalyzedGenericCall {
+            call,
+            expr_scopes,
+            body_block,
+        }))
+    }
+
+    fn analyze_condition<'i, 'p>(
+        &self,
+        condition: &'p Condition<'i>,
+        document: &'i Document,
+        request_time: Instant,
+        snapshot: &mut ShallowAnalysisSnapshot,
+        deps: &mut Vec<Arc<AnalysisNode>>,
+    ) -> AnalyzedCondition<'i, 'p> {
+        let expr_scopes =
+            self.analyze_expr(&condition.condition, document, request_time, snapshot, deps);
+        let then_block = self.analyze_block(
+            &condition.then_block,
+            document,
+            request_time,
+            snapshot,
+            deps,
+        );
+        let else_block =
+            match &condition.else_block {
+                None => None,
+                Some(Either::Left(next_condition)) => Some(Either::Left(Box::new(
+                    self.analyze_condition(next_condition, document, request_time, snapshot, deps),
+                ))),
+                Some(Either::Right(last_block)) => Some(Either::Right(Box::new(
+                    self.analyze_block(last_block, document, request_time, snapshot, deps),
+                ))),
+            };
+        AnalyzedCondition {
+            condition,
+            expr_scopes,
+            then_block,
+            else_block,
         }
     }
 

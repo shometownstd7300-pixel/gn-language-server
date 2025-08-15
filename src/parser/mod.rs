@@ -15,6 +15,8 @@
 use either::Either;
 use pest::Span;
 
+use crate::common::utils::parse_simple_literal;
+
 mod parse;
 mod tests;
 
@@ -227,7 +229,7 @@ impl<'i> Node<'i> for Call<'i> {
 pub struct Condition<'i> {
     pub condition: Box<Expr<'i>>,
     pub then_block: Block<'i>,
-    pub else_block: Option<Either<Box<Condition<'i>>, Block<'i>>>,
+    pub else_block: Option<Either<Box<Condition<'i>>, Box<Block<'i>>>>,
     pub span: Span<'i>,
 }
 
@@ -239,8 +241,8 @@ impl<'i> Node<'i> for Condition<'i> {
     fn children(&self) -> Vec<&dyn Node<'i>> {
         let mut children: Vec<&dyn Node> = vec![&*self.condition, &self.then_block];
         match &self.else_block {
-            Some(Either::Left(else_condition)) => children.push(&**else_condition),
-            Some(Either::Right(else_block)) => children.push(else_block),
+            Some(Either::Left(else_condition)) => children.push(else_condition.as_ref()),
+            Some(Either::Right(else_block)) => children.push(else_block.as_ref()),
             None => {}
         }
         children
@@ -343,6 +345,11 @@ impl<'i> Expr<'i> {
             PrimaryExpr::List(list) => Some(list),
             _ => None,
         }
+    }
+
+    pub fn as_simple_string(&self) -> Option<&'i str> {
+        self.as_primary_string()
+            .and_then(|string| parse_simple_literal(string.raw_value))
     }
 }
 

@@ -20,16 +20,20 @@ use std::{
     time::Instant,
 };
 
+use either::Either;
 use pest::Span;
 use tower_lsp::lsp_types::{Diagnostic, DocumentSymbol};
 
 use crate::{
     analyzer::{cache::AnalysisNode, utils::resolve_path},
-    common::storage::{Document, DocumentVersion},
-    parser::{parse, Block, Call, Comments, Node, Statement},
+    common::{
+        storage::{Document, DocumentVersion},
+        utils::parse_simple_literal,
+    },
+    parser::{parse, Assignment, Block, Call, Comments, Condition, Expr, Identifier},
 };
 
-#[derive(Clone, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PathSpan<'i> {
     pub path: &'i Path,
     pub span: Span<'i>,
@@ -181,9 +185,9 @@ impl ShallowAnalyzedFile {
 
 #[derive(Default)]
 pub struct ShallowAnalyzedBlock<'i, 'p> {
-    pub variables: Arc<AnalyzedVariableScope<'i, 'p>>,
-    pub templates: Arc<AnalyzedTemplateScope<'i, 'p>>,
-    pub targets: Arc<AnalyzedTargetScope<'i, 'p>>,
+    pub variables: Arc<VariableScope<'i, 'p>>,
+    pub templates: Arc<TemplateScope<'i, 'p>>,
+    pub targets: Arc<TargetScope<'i, 'p>>,
 }
 
 impl ShallowAnalyzedBlock<'_, '_> {
@@ -235,51 +239,52 @@ impl AnalyzedFile {
         })
     }
 
-    pub fn variables_at(&self, pos: usize) -> AnalyzedVariableScope {
+    pub fn variables_at(&self, pos: usize) -> VariableScope {
         self.analyzed_root.variables_at(pos)
     }
 
-    pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateScope {
+    pub fn templates_at(&self, pos: usize) -> TemplateScope {
         self.analyzed_root.templates_at(pos)
     }
 }
 
+#[derive(Clone)]
 pub struct AnalyzedBlock<'i, 'p> {
-    pub events: Vec<AnalyzedEvent<'i, 'p>>,
+    pub statements: Vec<AnalyzedStatement<'i, 'p>>,
+    pub document: &'i Document,
     pub span: Span<'i>,
 }
 
 impl<'i, 'p> AnalyzedBlock<'i, 'p> {
-    pub fn top_level_events<'a>(&'a self) -> TopLevelEvents<'i, 'p, 'a> {
-        TopLevelEvents::new(&self.events)
+    pub fn top_level_statements<'a>(&'a self) -> TopLevelStatements<'i, 'p, 'a> {
+        TopLevelStatements::new(&self.statements)
     }
 
-    pub fn targets(&self) -> impl Iterator<Item = &AnalyzedTarget<'i, 'p>> {
-        self.top_level_events().filter_map(|event| match event {
-            AnalyzedEvent::Target(target) => Some(target),
+    pub fn targets<'a>(&'a self) -> impl Iterator<Item = Target<'i, 'p>> + 'a {
+        self.top_level_statements().filter_map(|event| match event {
+            AnalyzedStatement::Target(target) => target.as_target(self.document),
             _ => None,
         })
     }
 
-    pub fn variables_at(&self, pos: usize) -> AnalyzedVariableScope<'i, 'p> {
-        let mut variables = AnalyzedVariableScope::new();
+    pub fn variables_at(&self, pos: usize) -> VariableScope<'i, 'p> {
+        let mut variables = VariableScope::new();
 
         // First pass: Collect all variables in the scope.
-        let mut declare_args_stack: Vec<&AnalyzedBlock> = Vec::new();
-        for event in self.top_level_events() {
-            match event {
-                AnalyzedEvent::Assignment(assignment) => {
-                    while let Some(last_declare_args) = declare_args_stack.last() {
-                        if assignment.statement.span().end_pos() <= last_declare_args.span.end_pos()
-                        {
-                            break;
-                        }
-                        declare_args_stack.pop();
-                    }
+        let mut declare_args_stack: Vec<&AnalyzedDeclareArgs> = Vec::new();
+        for statement in self.top_level_statements() {
+            while let Some(last_declare_args) = declare_args_stack.last() {
+                if statement.span().start_pos() <= last_declare_args.call.span.end_pos() {
+                    break;
+                }
+                declare_args_stack.pop();
+            }
+            match statement {
+                AnalyzedStatement::Assignment(assignment) => {
+                    let assignment = assignment.as_variable_assignment(self.document);
                     variables
-                        .ensure(assignment.primary_variable.as_str(), || AnalyzedVariable {
-                            assignments: Default::default(),
-                            is_args: !declare_args_stack.is_empty(),
+                        .ensure(assignment.primary_variable.as_str(), || {
+                            Variable::new(!declare_args_stack.is_empty())
                         })
                         .assignments
                         .insert(
@@ -287,26 +292,63 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                                 path: &assignment.document.path,
                                 span: assignment.primary_variable,
                             },
-                            assignment.clone(),
+                            assignment,
                         );
                 }
-                AnalyzedEvent::Import(import) => {
+                AnalyzedStatement::Foreach(foreach) => {
+                    let assignment = foreach.as_variable_assignment(self.document);
+                    variables
+                        .ensure(assignment.primary_variable.as_str(), || {
+                            Variable::new(!declare_args_stack.is_empty())
+                        })
+                        .assignments
+                        .insert(
+                            PathSpan {
+                                path: &assignment.document.path,
+                                span: assignment.primary_variable,
+                            },
+                            assignment,
+                        );
+                }
+                AnalyzedStatement::ForwardVariablesFrom(forward_variables_from) => {
+                    for assignment in forward_variables_from.as_variable_assignment(self.document) {
+                        variables
+                            .ensure(assignment.primary_variable.as_str(), || {
+                                Variable::new(!declare_args_stack.is_empty())
+                            })
+                            .assignments
+                            .insert(
+                                PathSpan {
+                                    path: &assignment.document.path,
+                                    span: assignment.primary_variable,
+                                },
+                                assignment,
+                            );
+                    }
+                }
+                AnalyzedStatement::Import(import) => {
                     // TODO: Handle import() within declare_args.
                     variables.import(&import.file.analyzed_root.variables);
                 }
-                AnalyzedEvent::DeclareArgs(block) => {
-                    declare_args_stack.push(block);
+                AnalyzedStatement::SyntheticImport(import) => {
+                    variables.import(&import.file.analyzed_root.variables);
                 }
-                _ => {}
+                AnalyzedStatement::DeclareArgs(declare_args) => {
+                    declare_args_stack.push(declare_args);
+                }
+                AnalyzedStatement::Conditions(_)
+                | AnalyzedStatement::Target(_)
+                | AnalyzedStatement::Template(_)
+                | AnalyzedStatement::GenericCall(_) => {}
             }
         }
 
         // Second pass: Find the subscope that contains the position, and merge
         // its variables.
-        for event in self.top_level_events() {
-            if let AnalyzedEvent::NewScope(block) = event {
-                if block.span.start() < pos && pos < block.span.end() {
-                    variables.merge(block.variables_at(pos));
+        for statement in self.top_level_statements() {
+            for scope in statement.subscopes() {
+                if scope.span.start() < pos && pos < scope.span.end() {
+                    variables.merge(scope.variables_at(pos));
                 }
             }
         }
@@ -314,28 +356,39 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         variables
     }
 
-    pub fn templates_at(&self, pos: usize) -> AnalyzedTemplateScope<'i, 'p> {
-        let mut templates = AnalyzedTemplateScope::new();
+    pub fn templates_at(&self, pos: usize) -> TemplateScope<'i, 'p> {
+        let mut templates = TemplateScope::new();
 
         // First pass: Collect all templates in the scope.
-        for event in self.top_level_events() {
-            match event {
-                AnalyzedEvent::Template(template) => {
-                    templates.insert(template.name, template.clone());
+        for statement in self.top_level_statements() {
+            match statement {
+                AnalyzedStatement::Template(template) => {
+                    if let Some(template) = template.as_template(self.document) {
+                        templates.insert(template.name, template);
+                    }
                 }
-                AnalyzedEvent::Import(import) => {
+                AnalyzedStatement::Import(import) => {
                     templates.import(&import.file.analyzed_root.templates);
                 }
-                _ => {}
+                AnalyzedStatement::SyntheticImport(import) => {
+                    templates.import(&import.file.analyzed_root.templates);
+                }
+                AnalyzedStatement::Assignment(_)
+                | AnalyzedStatement::Conditions(_)
+                | AnalyzedStatement::DeclareArgs(_)
+                | AnalyzedStatement::Foreach(_)
+                | AnalyzedStatement::ForwardVariablesFrom(_)
+                | AnalyzedStatement::Target(_)
+                | AnalyzedStatement::GenericCall(_) => {}
             }
         }
 
         // Second pass: Find the subscope that contains the position, and merge
         // its templates.
-        for event in self.top_level_events() {
-            if let AnalyzedEvent::NewScope(block) = event {
-                if block.span.start() < pos && pos < block.span.end() {
-                    templates.merge(block.templates_at(pos));
+        for statement in self.top_level_statements() {
+            for scope in statement.subscopes() {
+                if scope.span.start() < pos && pos < scope.span.end() {
+                    templates.merge(scope.templates_at(pos));
                 }
             }
         }
@@ -344,90 +397,352 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
     }
 }
 
-pub struct TopLevelEvents<'i, 'p, 'a> {
-    stack: Vec<&'a AnalyzedEvent<'i, 'p>>,
+pub struct TopLevelStatements<'i, 'p, 'a> {
+    stack: Vec<&'a AnalyzedStatement<'i, 'p>>,
 }
 
-impl<'i, 'p, 'a> TopLevelEvents<'i, 'p, 'a> {
-    pub fn new<I>(events: impl IntoIterator<Item = &'a AnalyzedEvent<'i, 'p>, IntoIter = I>) -> Self
+impl<'i, 'p, 'a> TopLevelStatements<'i, 'p, 'a> {
+    pub fn new<I>(
+        events: impl IntoIterator<Item = &'a AnalyzedStatement<'i, 'p>, IntoIter = I>,
+    ) -> Self
     where
-        I: DoubleEndedIterator<Item = &'a AnalyzedEvent<'i, 'p>>,
+        I: DoubleEndedIterator<Item = &'a AnalyzedStatement<'i, 'p>>,
     {
-        TopLevelEvents {
+        TopLevelStatements {
             stack: events.into_iter().rev().collect(),
         }
     }
 }
 
-impl<'i, 'p, 'a> Iterator for TopLevelEvents<'i, 'p, 'a> {
-    type Item = &'a AnalyzedEvent<'i, 'p>;
+impl<'i, 'p, 'a> Iterator for TopLevelStatements<'i, 'p, 'a> {
+    type Item = &'a AnalyzedStatement<'i, 'p>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let event = self.stack.pop()?;
-        match event {
-            AnalyzedEvent::Conditions(blocks) => {
+        let statement = self.stack.pop()?;
+        match statement {
+            AnalyzedStatement::Conditions(condition) => {
+                let mut blocks = Vec::new();
+                let mut current_condition = condition;
+                loop {
+                    blocks.push(&current_condition.then_block);
+                    match &current_condition.else_block {
+                        Some(Either::Left(next_condition)) => {
+                            current_condition = next_condition;
+                        }
+                        Some(Either::Right(last_block)) => {
+                            blocks.push(last_block);
+                            break;
+                        }
+                        None => break,
+                    }
+                }
                 self.stack
-                    .extend(blocks.iter().flat_map(|block| &block.events).rev());
+                    .extend(blocks.into_iter().flat_map(|block| &block.statements).rev());
             }
-            AnalyzedEvent::DeclareArgs(block) => {
-                self.stack.extend(block.events.iter().rev());
+            AnalyzedStatement::DeclareArgs(declare_args) => {
+                self.stack
+                    .extend(declare_args.body_block.statements.iter().rev());
             }
-            AnalyzedEvent::Import(_)
-            | AnalyzedEvent::Assignment(_)
-            | AnalyzedEvent::Template(_)
-            | AnalyzedEvent::Target(_)
-            | AnalyzedEvent::NewScope(_) => {}
+            AnalyzedStatement::Foreach(foreach) => {
+                self.stack
+                    .extend(foreach.body_block.statements.iter().rev());
+            }
+            AnalyzedStatement::Assignment(_)
+            | AnalyzedStatement::Import(_)
+            | AnalyzedStatement::ForwardVariablesFrom(_)
+            | AnalyzedStatement::Template(_)
+            | AnalyzedStatement::Target(_)
+            | AnalyzedStatement::GenericCall(_)
+            | AnalyzedStatement::SyntheticImport(_) => {}
         }
-        Some(event)
+        Some(statement)
     }
 }
 
-pub enum AnalyzedEvent<'i, 'p> {
-    Conditions(Vec<AnalyzedBlock<'i, 'p>>),
-    Import(AnalyzedImport),
-    DeclareArgs(AnalyzedBlock<'i, 'p>),
-    Assignment(AnalyzedAssignment<'i, 'p>),
-    Template(AnalyzedTemplate<'i, 'p>),
-    Target(AnalyzedTarget<'i, 'p>),
-    NewScope(AnalyzedBlock<'i, 'p>),
+#[derive(Clone)]
+pub enum AnalyzedStatement<'i, 'p> {
+    Assignment(Box<AnalyzedAssignment<'i, 'p>>),
+    Conditions(Box<AnalyzedCondition<'i, 'p>>),
+    DeclareArgs(Box<AnalyzedDeclareArgs<'i, 'p>>),
+    Foreach(Box<AnalyzedForeach<'i, 'p>>),
+    ForwardVariablesFrom(Box<AnalyzedForwardVariablesFrom<'i, 'p>>),
+    Import(Box<AnalyzedImport<'i, 'p>>),
+    Target(Box<AnalyzedTarget<'i, 'p>>),
+    Template(Box<AnalyzedTemplate<'i, 'p>>),
+    GenericCall(Box<AnalyzedGenericCall<'i, 'p>>),
+    SyntheticImport(Box<SyntheticImport<'i>>),
 }
 
-pub struct AnalyzedImport {
+impl<'i, 'p> AnalyzedStatement<'i, 'p> {
+    pub fn span(&self) -> Span<'i> {
+        match self {
+            AnalyzedStatement::Assignment(assignment) => assignment.assignment.span,
+            AnalyzedStatement::Conditions(condition) => condition.condition.span,
+            AnalyzedStatement::DeclareArgs(declare_args) => declare_args.call.span,
+            AnalyzedStatement::Foreach(foreach) => foreach.call.span,
+            AnalyzedStatement::ForwardVariablesFrom(forward_variables_from) => {
+                forward_variables_from.call.span
+            }
+            AnalyzedStatement::Import(import) => import.call.span,
+            AnalyzedStatement::Target(target) => target.call.span,
+            AnalyzedStatement::Template(template) => template.call.span,
+            AnalyzedStatement::GenericCall(generic_call) => generic_call.call.span,
+            AnalyzedStatement::SyntheticImport(synthetic_import) => synthetic_import.span,
+        }
+    }
+
+    pub fn body_scope(&self) -> Option<&AnalyzedBlock<'i, 'p>> {
+        match self {
+            AnalyzedStatement::Target(target) => Some(&target.body_block),
+            AnalyzedStatement::Template(template) => Some(&template.body_block),
+            AnalyzedStatement::GenericCall(generic_call) => generic_call.body_block.as_ref(),
+            AnalyzedStatement::Assignment(_)
+            | AnalyzedStatement::Conditions(_)
+            | AnalyzedStatement::DeclareArgs(_)
+            | AnalyzedStatement::Foreach(_)
+            | AnalyzedStatement::ForwardVariablesFrom(_)
+            | AnalyzedStatement::Import(_)
+            | AnalyzedStatement::SyntheticImport(_) => None,
+        }
+    }
+
+    pub fn expr_scopes(&self) -> impl IntoIterator<Item = &AnalyzedBlock<'i, 'p>> {
+        match self {
+            AnalyzedStatement::Assignment(assignment) => {
+                Either::Left(assignment.expr_scopes.as_slice())
+            }
+            AnalyzedStatement::Conditions(condition) => {
+                let mut expr_scopes = Vec::new();
+                let mut current_condition = condition;
+                loop {
+                    expr_scopes.extend(&current_condition.expr_scopes);
+                    match &current_condition.else_block {
+                        Some(Either::Left(next_condition)) => {
+                            current_condition = next_condition;
+                        }
+                        Some(Either::Right(_)) => break,
+                        None => break,
+                    }
+                }
+                Either::Right(expr_scopes)
+            }
+            AnalyzedStatement::Foreach(foreach) => Either::Left(foreach.expr_scopes.as_slice()),
+            AnalyzedStatement::ForwardVariablesFrom(forward_variables_from) => {
+                Either::Left(forward_variables_from.expr_scopes.as_slice())
+            }
+            AnalyzedStatement::Target(target) => Either::Left(target.expr_scopes.as_slice()),
+            AnalyzedStatement::Template(template) => Either::Left(template.expr_scopes.as_slice()),
+            AnalyzedStatement::GenericCall(generic_call) => {
+                Either::Left(generic_call.expr_scopes.as_slice())
+            }
+            AnalyzedStatement::DeclareArgs(_)
+            | AnalyzedStatement::Import(_)
+            | AnalyzedStatement::SyntheticImport(_) => Either::Left([].as_slice()),
+        }
+        .into_iter()
+    }
+
+    pub fn subscopes(&self) -> impl Iterator<Item = &AnalyzedBlock<'i, 'p>> {
+        self.body_scope().into_iter().chain(self.expr_scopes())
+    }
+}
+
+#[derive(Clone)]
+pub struct AnalyzedAssignment<'i, 'p> {
+    pub assignment: &'p Assignment<'i>,
+    pub primary_variable: Span<'i>,
+    pub comments: Comments<'i>,
+    pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
+}
+
+#[derive(Clone)]
+pub struct AnalyzedCondition<'i, 'p> {
+    pub condition: &'p Condition<'i>,
+    pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
+    pub then_block: AnalyzedBlock<'i, 'p>,
+    pub else_block: Option<Either<Box<AnalyzedCondition<'i, 'p>>, Box<AnalyzedBlock<'i, 'p>>>>,
+}
+
+#[derive(Clone)]
+pub struct AnalyzedDeclareArgs<'i, 'p> {
+    pub call: &'p Call<'i>,
+    pub body_block: AnalyzedBlock<'i, 'p>,
+}
+
+#[derive(Clone)]
+pub struct AnalyzedForeach<'i, 'p> {
+    pub call: &'p Call<'i>,
+    pub loop_variable: &'p Identifier<'i>,
+    pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
+    pub body_block: AnalyzedBlock<'i, 'p>,
+}
+
+#[derive(Clone)]
+pub struct AnalyzedForwardVariablesFrom<'i, 'p> {
+    pub call: &'p Call<'i>,
+    pub includes: &'p Expr<'i>,
+    pub excludes: Option<&'p Expr<'i>>,
+    pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
+}
+
+#[derive(Clone)]
+pub struct AnalyzedImport<'i, 'p> {
+    pub call: &'p Call<'i>,
     pub file: Pin<Arc<ShallowAnalyzedFile>>,
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct AnalyzedAssignment<'i, 'p> {
+#[derive(Clone)]
+pub struct AnalyzedTarget<'i, 'p> {
+    pub call: &'p Call<'i>,
+    pub name: &'p Expr<'i>,
+    pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
+    pub body_block: AnalyzedBlock<'i, 'p>,
+}
+
+#[derive(Clone)]
+pub struct AnalyzedTemplate<'i, 'p> {
+    pub call: &'p Call<'i>,
+    pub name: &'p Expr<'i>,
+    pub comments: Comments<'i>,
+    pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
+    pub body_block: AnalyzedBlock<'i, 'p>,
+}
+
+#[derive(Clone)]
+pub struct AnalyzedGenericCall<'i, 'p> {
+    pub call: &'p Call<'i>,
+    pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
+    pub body_block: Option<AnalyzedBlock<'i, 'p>>,
+}
+
+#[derive(Clone)]
+pub struct SyntheticImport<'i> {
+    pub file: Pin<Arc<ShallowAnalyzedFile>>,
+    pub span: Span<'i>,
+}
+
+#[derive(Clone)]
+pub struct Target<'i, 'p> {
     pub document: &'i Document,
-    pub statement: &'p Statement<'i>,
+    pub call: &'p Call<'i>,
+    pub name: &'i str,
+}
+
+impl<'i, 'p> AnalyzedTarget<'i, 'p> {
+    pub fn as_target(&self, document: &'i Document) -> Option<Target<'i, 'p>> {
+        let name = self.name.as_simple_string()?;
+        Some(Target {
+            document,
+            call: self.call,
+            name,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct Template<'i, 'p> {
+    pub document: &'i Document,
+    pub call: &'p Call<'i>,
+    pub name: &'i str,
+    pub comments: Comments<'i>,
+}
+
+impl<'i, 'p> AnalyzedTemplate<'i, 'p> {
+    pub fn as_template(&self, document: &'i Document) -> Option<Template<'i, 'p>> {
+        let name = self.name.as_simple_string()?;
+        Some(Template {
+            document,
+            call: self.call,
+            name,
+            comments: self.comments.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Variable<'i, 'p> {
+    pub assignments: HashMap<PathSpan<'i>, VariableAssignment<'i, 'p>>,
+    pub is_args: bool,
+}
+
+impl Variable<'_, '_> {
+    pub fn new(is_args: bool) -> Self {
+        Self {
+            assignments: HashMap::new(),
+            is_args,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VariableAssignment<'i, 'p> {
+    pub document: &'i Document,
+    pub assignment_or_call: Either<&'p Assignment<'i>, &'p Call<'i>>,
     pub primary_variable: Span<'i>,
     pub comments: Comments<'i>,
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct AnalyzedTemplate<'i, 'p> {
-    pub document: &'i Document,
-    pub call: &'p Call<'i>,
-    pub name: &'i str,
-    pub comments: Comments<'i>,
+impl<'i, 'p> AnalyzedAssignment<'i, 'p> {
+    pub fn as_variable_assignment(&self, document: &'i Document) -> VariableAssignment<'i, 'p> {
+        VariableAssignment {
+            document,
+            assignment_or_call: Either::Left(self.assignment),
+            primary_variable: self.primary_variable,
+            comments: self.comments.clone(),
+        }
+    }
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct AnalyzedTarget<'i, 'p> {
-    pub document: &'i Document,
-    pub call: &'p Call<'i>,
-    pub name: &'i str,
+impl<'i, 'p> AnalyzedForeach<'i, 'p> {
+    pub fn as_variable_assignment(&self, document: &'i Document) -> VariableAssignment<'i, 'p> {
+        VariableAssignment {
+            document,
+            assignment_or_call: Either::Right(self.call),
+            primary_variable: self.loop_variable.span,
+            comments: Default::default(),
+        }
+    }
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct AnalyzedVariable<'i, 'p> {
-    pub assignments: HashMap<PathSpan<'i>, AnalyzedAssignment<'i, 'p>>,
-    pub is_args: bool,
+impl<'i, 'p> AnalyzedForwardVariablesFrom<'i, 'p> {
+    pub fn as_variable_assignment(
+        &self,
+        document: &'i Document,
+    ) -> Vec<VariableAssignment<'i, 'p>> {
+        // TODO: Handle excludes.
+        let Some(strings) = self.includes.as_primary_list().map(|list| {
+            list.values
+                .iter()
+                .filter_map(|expr| expr.as_primary_string())
+                .collect::<Vec<_>>()
+        }) else {
+            return Vec::new();
+        };
+        strings
+            .into_iter()
+            .filter_map(|string| {
+                parse_simple_literal(string.raw_value).map(|_| {
+                    let primary_variable = Span::new(
+                        string.span.get_input(),
+                        string.span.start() + 1,
+                        string.span.end() - 1,
+                    )
+                    .unwrap();
+                    VariableAssignment {
+                        document,
+                        assignment_or_call: Either::Right(self.call),
+                        primary_variable,
+                        comments: Default::default(),
+                    }
+                })
+            })
+            .collect()
+    }
 }
 
-pub type AnalyzedTemplateScope<'i, 'p> = Environment<'i, AnalyzedTemplate<'i, 'p>>;
-pub type AnalyzedTargetScope<'i, 'p> = Environment<'i, AnalyzedTarget<'i, 'p>>;
-pub type AnalyzedVariableScope<'i, 'p> = Environment<'i, AnalyzedVariable<'i, 'p>>;
+pub type TargetScope<'i, 'p> = Environment<'i, Target<'i, 'p>>;
+pub type TemplateScope<'i, 'p> = Environment<'i, Template<'i, 'p>>;
+pub type VariableScope<'i, 'p> = Environment<'i, Variable<'i, 'p>>;
 
 #[derive(Clone, Eq, PartialEq)]
 pub enum AnalyzedLink<'i> {

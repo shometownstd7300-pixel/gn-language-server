@@ -18,7 +18,7 @@ use crate::{
     analyzer::utils::resolve_path,
     common::{
         error::{Error, Result},
-        utils::{parse_simple_literal, LineIndex},
+        utils::LineIndex,
     },
     parser::{parse, AssignOp, LValue, Statement},
 };
@@ -48,15 +48,7 @@ pub fn evaluate_dot_gn(workspace_root: &Path, input: &str) -> Result<PathBuf> {
                 position.character + 1
             )));
         }
-        let Some(string) = assignment.rvalue.as_primary_string() else {
-            return Err(Error::General(format!(
-                "{}:{}:{}: buildconfig is not a simple string",
-                workspace_root.join(".gn").to_string_lossy(),
-                position.line + 1,
-                position.character + 1
-            )));
-        };
-        let Some(name) = parse_simple_literal(string.raw_value) else {
+        let Some(name) = assignment.rvalue.as_simple_string() else {
             return Err(Error::General(format!(
                 "{}:{}:{}: buildconfig is not a simple string",
                 workspace_root.join(".gn").to_string_lossy(),

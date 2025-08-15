@@ -30,6 +30,7 @@ pub enum DocumentVersion {
     IoError,
 }
 
+#[derive(Debug)]
 pub struct Document {
     pub path: PathBuf,
     pub data: Pin<String>,
