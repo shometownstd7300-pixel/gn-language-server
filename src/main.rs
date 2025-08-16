@@ -19,6 +19,7 @@ use crate::bench::run_bench;
 mod analyzer;
 mod bench;
 mod common;
+mod diagnostics;
 mod parser;
 mod server;
 

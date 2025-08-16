@@ -22,7 +22,7 @@ use std::{
 
 use either::Either;
 use pest::Span;
-use tower_lsp::lsp_types::{Diagnostic, DocumentSymbol};
+use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
     analyzer::{cache::AnalysisNode, utils::resolve_path},
@@ -80,6 +80,10 @@ impl<'i, T> Environment<'i, T> {
         self.locals
             .get(name)
             .or_else(|| self.imports.iter().find_map(|import| import.get(name)))
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.locals.contains_key(name) || self.imports.iter().any(|import| import.contains(name))
     }
 
     pub fn import(&mut self, other: &Arc<Environment<'i, T>>) {
@@ -203,7 +207,6 @@ pub struct AnalyzedFile {
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub symbols: Vec<DocumentSymbol>,
-    pub diagnostics: Vec<Diagnostic>,
     pub node: Arc<AnalysisNode>,
 }
 
@@ -216,7 +219,6 @@ impl AnalyzedFile {
         analyzed_root: AnalyzedBlock<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
         symbols: Vec<DocumentSymbol>,
-        diagnostics: Vec<Diagnostic>,
         deps: Vec<Arc<AnalysisNode>>,
         request_time: Instant,
     ) -> Pin<Arc<Self>> {
@@ -234,7 +236,6 @@ impl AnalyzedFile {
             analyzed_root,
             links,
             symbols,
-            diagnostics,
             node,
         })
     }
@@ -251,6 +252,7 @@ impl AnalyzedFile {
 #[derive(Clone)]
 pub struct AnalyzedBlock<'i, 'p> {
     pub statements: Vec<AnalyzedStatement<'i, 'p>>,
+    pub block: &'p Block<'i>,
     pub document: &'i Document,
     pub span: Span<'i>,
 }
@@ -339,7 +341,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                 AnalyzedStatement::Conditions(_)
                 | AnalyzedStatement::Target(_)
                 | AnalyzedStatement::Template(_)
-                | AnalyzedStatement::GenericCall(_) => {}
+                | AnalyzedStatement::BuiltinCall(_) => {}
             }
         }
 
@@ -379,7 +381,7 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                 | AnalyzedStatement::Foreach(_)
                 | AnalyzedStatement::ForwardVariablesFrom(_)
                 | AnalyzedStatement::Target(_)
-                | AnalyzedStatement::GenericCall(_) => {}
+                | AnalyzedStatement::BuiltinCall(_) => {}
             }
         }
 
@@ -452,7 +454,7 @@ impl<'i, 'p, 'a> Iterator for TopLevelStatements<'i, 'p, 'a> {
             | AnalyzedStatement::ForwardVariablesFrom(_)
             | AnalyzedStatement::Template(_)
             | AnalyzedStatement::Target(_)
-            | AnalyzedStatement::GenericCall(_)
+            | AnalyzedStatement::BuiltinCall(_)
             | AnalyzedStatement::SyntheticImport(_) => {}
         }
         Some(statement)
@@ -469,7 +471,7 @@ pub enum AnalyzedStatement<'i, 'p> {
     Import(Box<AnalyzedImport<'i, 'p>>),
     Target(Box<AnalyzedTarget<'i, 'p>>),
     Template(Box<AnalyzedTemplate<'i, 'p>>),
-    GenericCall(Box<AnalyzedGenericCall<'i, 'p>>),
+    BuiltinCall(Box<AnalyzedBuiltinCall<'i, 'p>>),
     SyntheticImport(Box<SyntheticImport<'i>>),
 }
 
@@ -486,7 +488,7 @@ impl<'i, 'p> AnalyzedStatement<'i, 'p> {
             AnalyzedStatement::Import(import) => import.call.span,
             AnalyzedStatement::Target(target) => target.call.span,
             AnalyzedStatement::Template(template) => template.call.span,
-            AnalyzedStatement::GenericCall(generic_call) => generic_call.call.span,
+            AnalyzedStatement::BuiltinCall(builtin_call) => builtin_call.call.span,
             AnalyzedStatement::SyntheticImport(synthetic_import) => synthetic_import.span,
         }
     }
@@ -495,7 +497,7 @@ impl<'i, 'p> AnalyzedStatement<'i, 'p> {
         match self {
             AnalyzedStatement::Target(target) => Some(&target.body_block),
             AnalyzedStatement::Template(template) => Some(&template.body_block),
-            AnalyzedStatement::GenericCall(generic_call) => generic_call.body_block.as_ref(),
+            AnalyzedStatement::BuiltinCall(builtin_call) => builtin_call.body_block.as_ref(),
             AnalyzedStatement::Assignment(_)
             | AnalyzedStatement::Conditions(_)
             | AnalyzedStatement::DeclareArgs(_)
@@ -532,8 +534,8 @@ impl<'i, 'p> AnalyzedStatement<'i, 'p> {
             }
             AnalyzedStatement::Target(target) => Either::Left(target.expr_scopes.as_slice()),
             AnalyzedStatement::Template(template) => Either::Left(template.expr_scopes.as_slice()),
-            AnalyzedStatement::GenericCall(generic_call) => {
-                Either::Left(generic_call.expr_scopes.as_slice())
+            AnalyzedStatement::BuiltinCall(builtin_call) => {
+                Either::Left(builtin_call.expr_scopes.as_slice())
             }
             AnalyzedStatement::DeclareArgs(_)
             | AnalyzedStatement::Import(_)
@@ -573,6 +575,7 @@ pub struct AnalyzedDeclareArgs<'i, 'p> {
 pub struct AnalyzedForeach<'i, 'p> {
     pub call: &'p Call<'i>,
     pub loop_variable: &'p Identifier<'i>,
+    pub loop_items: &'p Expr<'i>,
     pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
     pub body_block: AnalyzedBlock<'i, 'p>,
 }
@@ -581,7 +584,6 @@ pub struct AnalyzedForeach<'i, 'p> {
 pub struct AnalyzedForwardVariablesFrom<'i, 'p> {
     pub call: &'p Call<'i>,
     pub includes: &'p Expr<'i>,
-    pub excludes: Option<&'p Expr<'i>>,
     pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
 }
 
@@ -609,7 +611,7 @@ pub struct AnalyzedTemplate<'i, 'p> {
 }
 
 #[derive(Clone)]
-pub struct AnalyzedGenericCall<'i, 'p> {
+pub struct AnalyzedBuiltinCall<'i, 'p> {
     pub call: &'p Call<'i>,
     pub expr_scopes: Vec<AnalyzedBlock<'i, 'p>>,
     pub body_block: Option<AnalyzedBlock<'i, 'p>>,

@@ -333,6 +333,13 @@ impl<'i> Expr<'i> {
         }
     }
 
+    pub fn as_primary_identifier(&self) -> Option<&Identifier<'i>> {
+        match self.as_primary()? {
+            PrimaryExpr::Identifier(identifier) => Some(identifier),
+            _ => None,
+        }
+    }
+
     pub fn as_primary_string(&self) -> Option<&StringLiteral<'i>> {
         match self.as_primary()? {
             PrimaryExpr::String(string) => Some(string),
@@ -345,6 +352,19 @@ impl<'i> Expr<'i> {
             PrimaryExpr::List(list) => Some(list),
             _ => None,
         }
+    }
+
+    pub fn as_simple_string_list(&self) -> Option<Vec<&'i str>> {
+        let list = self.as_primary_list()?;
+        let strings: Vec<_> = list
+            .values
+            .iter()
+            .filter_map(|item| item.as_simple_string())
+            .collect();
+        if strings.len() != list.values.len() {
+            return None;
+        }
+        Some(strings)
     }
 
     pub fn as_simple_string(&self) -> Option<&'i str> {

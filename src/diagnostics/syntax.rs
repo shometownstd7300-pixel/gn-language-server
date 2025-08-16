@@ -19,14 +19,15 @@ use crate::{
     parser::{Block, Node},
 };
 
-pub fn collect_diagnostics(document: &Document, ast_root: &Block) -> Vec<Diagnostic> {
-    ast_root
-        .errors()
-        .map(|error| Diagnostic {
-            range: document.line_index.range(error.span()),
-            severity: Some(DiagnosticSeverity::ERROR),
-            message: error.diagnosis().to_string(),
-            ..Default::default()
-        })
-        .collect()
+pub fn collect_syntax_errors(
+    ast_root: &Block,
+    document: &Document,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.extend(ast_root.errors().map(|error| Diagnostic {
+        range: document.line_index.range(error.span()),
+        severity: Some(DiagnosticSeverity::ERROR),
+        message: error.diagnosis().to_string(),
+        ..Default::default()
+    }));
 }

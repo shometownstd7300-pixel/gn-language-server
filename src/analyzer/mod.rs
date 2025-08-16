@@ -21,8 +21,9 @@ use std::{
 };
 
 pub use data::{
-    AnalyzedAssignment, AnalyzedBlock, AnalyzedFile, AnalyzedImport, AnalyzedLink, AnalyzedTarget,
-    AnalyzedTemplate, ShallowAnalyzedFile, Target, Template, Variable,
+    AnalyzedAssignment, AnalyzedBlock, AnalyzedFile, AnalyzedImport, AnalyzedLink,
+    AnalyzedStatement, AnalyzedTarget, AnalyzedTemplate, ShallowAnalyzedFile, Target, Template,
+    Variable, VariableScope,
 };
 
 use crate::{
@@ -39,7 +40,6 @@ use crate::{
 
 mod cache;
 mod data;
-mod diagnostics;
 mod dotgn;
 mod full;
 mod links;

@@ -14,7 +14,9 @@
 
 use tower_lsp::lsp_types::Url;
 
-use crate::{common::storage::DocumentVersion, server::RequestContext};
+use crate::{
+    common::storage::DocumentVersion, diagnostics::compute_diagnostics, server::RequestContext,
+};
 
 pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
     let Ok(path) = uri.to_file_path() else {
@@ -30,6 +32,8 @@ pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
         return;
     };
 
+    let diagnostics = compute_diagnostics(&current_file.analyzed_root, &config);
+
     let version = if let DocumentVersion::InMemory { revision } = current_file.document.version {
         Some(revision)
     } else {
@@ -38,7 +42,7 @@ pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
 
     context
         .client
-        .publish_diagnostics(uri.clone(), current_file.diagnostics.clone(), version)
+        .publish_diagnostics(uri.clone(), diagnostics, version)
         .await;
 }
 

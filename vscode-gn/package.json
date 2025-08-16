@@ -83,6 +83,11 @@
           "default": false,
           "description": "Enables parallel indexing (experimental)."
         },
+        "gn.experimental.undefinedVariableAnalysis": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enables undefined variable analysis (experimental)."
+        },
         "gn.experimental.workspaceSymbols": {
           "type": "boolean",
           "default": false,

@@ -27,10 +27,9 @@ use crate::{
     analyzer::{
         cache::AnalysisNode,
         data::{
-            AnalyzedCondition, AnalyzedDeclareArgs, AnalyzedForeach, AnalyzedForwardVariablesFrom,
-            AnalyzedGenericCall, AnalyzedStatement, SyntheticImport,
+            AnalyzedBuiltinCall, AnalyzedCondition, AnalyzedDeclareArgs, AnalyzedForeach,
+            AnalyzedForwardVariablesFrom, AnalyzedStatement, SyntheticImport,
         },
-        diagnostics::collect_diagnostics,
         links::collect_links,
         shallow::{ShallowAnalysisSnapshot, ShallowAnalyzer},
         symbols::collect_symbols,
@@ -138,7 +137,6 @@ impl FullAnalyzer {
 
         let links = collect_links(&ast_root, path, &self.context);
         let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
-        let diagnostics = collect_diagnostics(&document, &ast_root);
 
         // SAFETY: links' contents are backed by pinned document.
         let links = unsafe { std::mem::transmute::<Vec<AnalyzedLink>, Vec<AnalyzedLink>>(links) };
@@ -155,7 +153,6 @@ impl FullAnalyzer {
             analyzed_root,
             links,
             symbols,
-            diagnostics,
             deps,
             request_time,
         )
@@ -224,6 +221,7 @@ impl FullAnalyzer {
 
         AnalyzedBlock {
             statements,
+            block,
             document,
             span: block.span,
         }
@@ -251,18 +249,14 @@ impl FullAnalyzer {
             }
             (FOREACH, Some(body_block)) => {
                 if call.args.len() == 2 {
-                    if let Some(loop_variable) = call.args[0].as_identifier() {
-                        let expr_scopes = call
-                            .args
-                            .iter()
-                            .skip(1)
-                            .flat_map(|expr| {
-                                self.analyze_expr(expr, document, request_time, snapshot, deps)
-                            })
-                            .collect();
+                    if let Some(loop_variable) = call.args[0].as_primary_identifier() {
+                        let loop_items = &call.args[1];
+                        let expr_scopes =
+                            self.analyze_expr(loop_items, document, request_time, snapshot, deps);
                         return AnalyzedStatement::Foreach(Box::new(AnalyzedForeach {
                             call,
                             loop_variable,
+                            loop_items,
                             expr_scopes,
                             body_block,
                         }));
@@ -284,7 +278,6 @@ impl FullAnalyzer {
                             call,
                             expr_scopes,
                             includes: &call.args[1],
-                            excludes: call.args.get(2),
                         },
                     ));
                 }
@@ -346,7 +339,7 @@ impl FullAnalyzer {
             .iter()
             .flat_map(|expr| self.analyze_expr(expr, document, request_time, snapshot, deps))
             .collect();
-        AnalyzedStatement::GenericCall(Box::new(AnalyzedGenericCall {
+        AnalyzedStatement::BuiltinCall(Box::new(AnalyzedBuiltinCall {
             call,
             expr_scopes,
             body_block,
