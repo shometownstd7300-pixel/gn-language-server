@@ -21,7 +21,7 @@ import subprocess
 
 
 _SECTION_RE = re.compile(r'^## <a name="([^"]+)">[^\n]*\n\n(.*?)(?=^## |\Z)', re.DOTALL | re.MULTILINE)
-_ITEM_RE = re.compile(r'^### <a name="[^"]+"></a>(\*+([^*]+)\*+[^\n]*?)&nbsp;[^\n]*\n(.*?)(?=^### |\Z  )', re.DOTALL | re.MULTILINE)
+_ITEM_RE = re.compile(r'^### <a name="[^"]+"></a>(\*+([^*]+)\*+[^\n]*?)&nbsp;[^\n]*\n(.*?)(?=^### |\Z)', re.DOTALL | re.MULTILINE)
 _VERBATIM_RE = re.compile(r'^```$\n(.*?)^```$', re.DOTALL | re.MULTILINE)
 
 
