@@ -21,7 +21,7 @@ use std::{
 
 use crate::{
     analyzer::Analyzer,
-    common::{storage::DocumentStorage, testutils::testdata},
+    common::{storage::DocumentStorage, testutils::testdata, workspace::WorkspaceFinder},
     parser::Statement,
 };
 
@@ -29,9 +29,14 @@ use crate::{
 fn test_analyze_smoke() {
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
     let analyzer = Analyzer::new(&storage);
+    let finder = WorkspaceFinder::new(None);
 
     let file = analyzer
-        .analyze(&testdata("workspaces/smoke/BUILD.gn"), Instant::now())
+        .analyze(
+            &testdata("workspaces/smoke/BUILD.gn"),
+            &finder,
+            Instant::now(),
+        )
         .unwrap();
 
     // No parse error.
@@ -53,11 +58,20 @@ fn test_analyze_cycles() {
     let request_time = Instant::now();
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
     let analyzer = Analyzer::new(&storage);
+    let finder = WorkspaceFinder::new(None);
 
     assert!(analyzer
-        .analyze(&testdata("workspaces/cycles/ok1.gni"), request_time)
+        .analyze(
+            &testdata("workspaces/cycles/ok1.gni"),
+            &finder,
+            request_time
+        )
         .is_ok());
     assert!(analyzer
-        .analyze(&testdata("workspaces/cycles/bad1.gni"), request_time)
+        .analyze(
+            &testdata("workspaces/cycles/bad1.gni"),
+            &finder,
+            request_time
+        )
         .is_ok());
 }

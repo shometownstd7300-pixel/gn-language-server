@@ -174,7 +174,9 @@ pub async fn completion(
     params: CompletionParams,
 ) -> Result<Option<CompletionResponse>> {
     let path = get_text_document_path(&params.text_document_position.text_document)?;
-    let current_file = context.analyzer.analyze(&path, context.request_time)?;
+    let current_file = context
+        .analyzer
+        .analyze(&path, &context.finder, context.request_time)?;
 
     let offset = current_file
         .document

@@ -34,7 +34,7 @@ use crate::{
     common::{
         error::{Error, Result},
         storage::DocumentStorage,
-        utils::find_nearest_workspace_root,
+        workspace::WorkspaceFinder,
     },
 };
 
@@ -61,23 +61,31 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(&self, path: &Path, request_time: Instant) -> Result<Pin<Arc<AnalyzedFile>>> {
+    pub fn analyze(
+        &self,
+        path: &Path,
+        finder: &WorkspaceFinder,
+        request_time: Instant,
+    ) -> Result<Pin<Arc<AnalyzedFile>>> {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
-        Ok(self.workspace_for(path)?.analyze(path, request_time))
+        Ok(self
+            .workspace_for(path, finder)?
+            .analyze(path, request_time))
     }
 
     pub fn analyze_shallow(
         &self,
         path: &Path,
+        finder: &WorkspaceFinder,
         request_time: Instant,
     ) -> Result<Pin<Arc<ShallowAnalyzedFile>>> {
         if !path.is_absolute() {
             return Err(Error::General("Path must be absolute".to_string()));
         }
         Ok(self
-            .workspace_for(path)?
+            .workspace_for(path, finder)?
             .analyze_shallow(path, request_time))
     }
 
@@ -92,8 +100,14 @@ impl Analyzer {
         self.workspaces.read().unwrap().keys().cloned().collect()
     }
 
-    fn workspace_for(&self, path: &Path) -> Result<Arc<WorkspaceAnalyzer>> {
-        let workspace_root = find_nearest_workspace_root(path)?;
+    fn workspace_for(
+        &self,
+        path: &Path,
+        finder: &WorkspaceFinder,
+    ) -> Result<Arc<WorkspaceAnalyzer>> {
+        let workspace_root = finder
+            .find_for(path)
+            .ok_or(Error::General("Workspace not found".to_string()))?;
         let dot_gn_path = workspace_root.join(".gn");
         let dot_gn_version = {
             let storage = self.storage.lock().unwrap();

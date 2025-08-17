@@ -27,7 +27,9 @@ use crate::{
 
 pub async fn hover(context: &RequestContext, params: HoverParams) -> Result<Option<Hover>> {
     let path = get_text_document_path(&params.text_document_position_params.text_document)?;
-    let current_file = context.analyzer.analyze(&path, context.request_time)?;
+    let current_file = context
+        .analyzer
+        .analyze(&path, &context.finder, context.request_time)?;
 
     let Some(ident) =
         lookup_identifier_at(&current_file, params.text_document_position_params.position)

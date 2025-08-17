@@ -22,20 +22,6 @@ use tokio::sync::SetOnce;
 use tower_lsp::lsp_types::{Position, Range};
 use walkdir::WalkDir;
 
-use crate::common::error::{Error, Result};
-
-pub fn find_nearest_workspace_root(path: &Path) -> Result<&Path> {
-    for dir in path.ancestors().skip(1) {
-        if dir.join(".gn").try_exists()? {
-            return Ok(dir);
-        }
-    }
-    Err(Error::General(format!(
-        "Workspace not found for {}",
-        path.to_string_lossy()
-    )))
-}
-
 pub fn walk_source_dirs(root: &Path) -> impl Iterator<Item = PathBuf> {
     WalkDir::new(root)
         .into_iter()

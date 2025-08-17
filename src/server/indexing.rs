@@ -34,9 +34,10 @@ pub async fn index(context: &RequestContext, workspace_root: &Path, parallel: bo
 
     for path in find_gn_files(workspace_root) {
         let analyzer = context.analyzer.clone();
+        let finder = context.finder.clone();
         let request_time = context.request_time;
         let task = async move {
-            analyzer.analyze_shallow(&path, request_time).ok();
+            analyzer.analyze_shallow(&path, &finder, request_time).ok();
         };
         let task = if parallel {
             async move {

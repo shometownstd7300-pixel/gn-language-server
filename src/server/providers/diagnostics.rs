@@ -28,7 +28,10 @@ pub async fn publish_diagnostics(context: &RequestContext, uri: &Url) {
         return;
     }
 
-    let Ok(current_file) = context.analyzer.analyze(&path, context.request_time) else {
+    let Ok(current_file) = context
+        .analyzer
+        .analyze(&path, &context.finder, context.request_time)
+    else {
         return;
     };
 

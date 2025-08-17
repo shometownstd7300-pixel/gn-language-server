@@ -37,10 +37,8 @@ use tower_lsp::{
 use crate::{
     analyzer::Analyzer,
     common::{
-        client::TestableClient,
-        error::RpcResult,
-        storage::DocumentStorage,
-        utils::{find_nearest_workspace_root, walk_source_dirs, AsyncSignal},
+        client::TestableClient, error::RpcResult, storage::DocumentStorage, utils::AsyncSignal,
+        workspace::WorkspaceFinder,
     },
 };
 
@@ -50,20 +48,36 @@ mod providers;
 struct ServerContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Analyzer>,
-    pub initialize_params: Arc<OnceLock<InitializeParams>>,
+    pub finder: OnceLock<WorkspaceFinder>,
     pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
 }
 
 impl ServerContext {
+    pub fn new(
+        storage: Arc<Mutex<DocumentStorage>>,
+        analyzer: Arc<Analyzer>,
+        client: TestableClient,
+    ) -> Self {
+        Self {
+            storage,
+            analyzer,
+            finder: OnceLock::new(),
+            indexed: Default::default(),
+            client,
+        }
+    }
+
     #[cfg(test)]
     pub fn new_for_testing() -> Self {
         let storage = Arc::new(Mutex::new(DocumentStorage::new()));
         let analyzer = Arc::new(Analyzer::new(&storage));
+        let finder = OnceLock::new();
+        let _ = finder.set(WorkspaceFinder::new(None));
         Self {
             storage,
             analyzer,
-            initialize_params: Default::default(),
+            finder,
             indexed: Default::default(),
             client: TestableClient::new_for_testing(),
         }
@@ -73,7 +87,7 @@ impl ServerContext {
         RequestContext {
             storage: self.storage.clone(),
             analyzer: self.analyzer.clone(),
-            initialize_params: self.initialize_params.clone(),
+            finder: self.finder.get().unwrap().clone(),
             indexed: self.indexed.clone(),
             client: self.client.clone(),
             request_time: Instant::now(),
@@ -85,7 +99,7 @@ impl ServerContext {
 pub struct RequestContext {
     pub storage: Arc<Mutex<DocumentStorage>>,
     pub analyzer: Arc<Analyzer>,
-    pub initialize_params: Arc<OnceLock<InitializeParams>>,
+    pub finder: WorkspaceFinder,
     pub indexed: Arc<Mutex<BTreeMap<PathBuf, AsyncSignal>>>,
     pub client: TestableClient,
     pub request_time: Instant,
@@ -104,18 +118,12 @@ struct Backend {
 
 impl Backend {
     pub fn new(
-        storage: &Arc<Mutex<DocumentStorage>>,
-        analyzer: &Arc<Analyzer>,
+        storage: Arc<Mutex<DocumentStorage>>,
+        analyzer: Arc<Analyzer>,
         client: TestableClient,
     ) -> Self {
         Self {
-            context: ServerContext {
-                storage: storage.clone(),
-                analyzer: analyzer.clone(),
-                initialize_params: Default::default(),
-                indexed: Default::default(),
-                client,
-            },
+            context: ServerContext::new(storage, analyzer, client),
         }
     }
 
@@ -125,7 +133,7 @@ impl Backend {
         path: &Path,
         parallel_indexing: bool,
     ) {
-        let Ok(workspace_root) = find_nearest_workspace_root(path) else {
+        let Some(workspace_root) = context.finder.find_for(path) else {
             return;
         };
         let workspace_root = workspace_root.to_path_buf();
@@ -151,7 +159,14 @@ impl Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> RpcResult<InitializeResult> {
-        self.context.initialize_params.set(params).unwrap();
+        let finder = WorkspaceFinder::new(
+            params
+                .root_uri
+                .and_then(|root_uri| root_uri.to_file_path().ok())
+                .as_deref(),
+        );
+        self.context.finder.set(finder).ok();
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -184,28 +199,6 @@ impl LanguageServer for Backend {
         let configurations = self.context.client.configurations().await;
         if !configurations.background_indexing {
             return;
-        }
-
-        let initialize_params = context.initialize_params.get().unwrap();
-        if let Some(root_uri) = &initialize_params.root_uri {
-            if let Ok(root_path) = root_uri.to_file_path() {
-                self.maybe_index_workspace_for(
-                    &context,
-                    &root_path,
-                    configurations.experimental.parallel_indexing,
-                )
-                .await;
-                for workspace_root in
-                    walk_source_dirs(&root_path).filter(|path| path.join(".gn").exists())
-                {
-                    self.maybe_index_workspace_for(
-                        &context,
-                        &workspace_root,
-                        configurations.experimental.parallel_indexing,
-                    )
-                    .await;
-                }
-            }
         }
     }
 
@@ -297,9 +290,8 @@ impl LanguageServer for Backend {
 pub async fn run() {
     let storage = Arc::new(Mutex::new(DocumentStorage::new()));
     let analyzer = Arc::new(Analyzer::new(&storage));
-    let (service, socket) = LspService::new(move |client| {
-        Backend::new(&storage, &analyzer, TestableClient::new(client))
-    });
+    let (service, socket) =
+        LspService::new(move |client| Backend::new(storage, analyzer, TestableClient::new(client)));
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();

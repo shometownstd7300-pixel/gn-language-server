@@ -25,7 +25,6 @@ use crate::{
     common::{
         binary::find_gn_binary,
         error::{Error, Result},
-        utils::find_nearest_workspace_root,
     },
     server::{providers::utils::get_text_document_path, RequestContext},
 };
@@ -46,7 +45,7 @@ pub async fn formatting(
                 gn_path.display()
             )));
         }
-    } else if let Some(gn_path) = find_gn_binary(find_nearest_workspace_root(&file_path).ok()) {
+    } else if let Some(gn_path) = find_gn_binary(context.finder.find_for(&file_path)) {
         gn_path
     } else {
         return Err(Error::General(

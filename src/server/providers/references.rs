@@ -16,10 +16,7 @@ use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
 
 use crate::{
     analyzer::{AnalyzedBlock, AnalyzedFile, AnalyzedLink},
-    common::{
-        error::{Error, Result},
-        utils::find_nearest_workspace_root,
-    },
+    common::error::{Error, Result},
     server::{
         providers::utils::{get_text_document_path, lookup_target_name_string_at},
         RequestContext,
@@ -41,7 +38,7 @@ async fn target_references(
     let bad_prefixes = get_overlapping_targets(&current_file.analyzed_root, target_name);
 
     // Wait for the workspace indexing to finish.
-    let workspace_root = find_nearest_workspace_root(&current_file.document.path)?;
+    let workspace_root = &current_file.workspace_root;
     let Some(indexed) = context.indexed.lock().unwrap().get(workspace_root).cloned() else {
         return Err(Error::General(format!(
             "Indexing for {} not started",
@@ -90,7 +87,9 @@ pub async fn references(
     }
 
     let path = get_text_document_path(&params.text_document_position.text_document)?;
-    let current_file = context.analyzer.analyze(&path, context.request_time)?;
+    let current_file = context
+        .analyzer
+        .analyze(&path, &context.finder, context.request_time)?;
 
     let position = params.text_document_position.position;
 

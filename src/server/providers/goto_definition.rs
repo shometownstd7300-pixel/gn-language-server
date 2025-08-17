@@ -34,7 +34,9 @@ pub async fn goto_definition(
     params: GotoDefinitionParams,
 ) -> Result<Option<GotoDefinitionResponse>> {
     let path = get_text_document_path(&params.text_document_position_params.text_document)?;
-    let current_file = context.analyzer.analyze(&path, context.request_time)?;
+    let current_file = context
+        .analyzer
+        .analyze(&path, &context.finder, context.request_time)?;
 
     // Check links first.
     if let Some(offset) = current_file
@@ -50,9 +52,11 @@ pub async fn goto_definition(
             let (path, position) = match link {
                 AnalyzedLink::File { path, .. } => (path, Position::default()),
                 AnalyzedLink::Target { path, name, .. } => {
-                    let target_file = context
-                        .analyzer
-                        .analyze_shallow(path, context.request_time)?;
+                    let target_file = context.analyzer.analyze_shallow(
+                        path,
+                        &context.finder,
+                        context.request_time,
+                    )?;
                     (
                         path,
                         find_target(&target_file, name)
