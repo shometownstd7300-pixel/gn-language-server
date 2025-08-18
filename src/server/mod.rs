@@ -127,12 +127,7 @@ impl Backend {
         }
     }
 
-    async fn maybe_index_workspace_for(
-        &self,
-        context: &RequestContext,
-        path: &Path,
-        parallel_indexing: bool,
-    ) {
+    async fn maybe_index_workspace_for(&self, context: &RequestContext, path: &Path) {
         let Some(workspace_root) = context.finder.find_for(path) else {
             return;
         };
@@ -150,7 +145,7 @@ impl Backend {
 
         let context = context.clone();
         spawn(async move {
-            indexing::index(&context, &workspace_root, parallel_indexing).await;
+            indexing::index(&context, &workspace_root).await;
             indexed.set();
         });
     }
@@ -213,12 +208,7 @@ impl LanguageServer for Backend {
         };
         let configurations = self.context.client.configurations().await;
         if configurations.background_indexing {
-            self.maybe_index_workspace_for(
-                &context,
-                &path,
-                configurations.experimental.parallel_indexing,
-            )
-            .await;
+            self.maybe_index_workspace_for(&context, &path).await;
         }
         providers::document::did_open(&self.context.request(), params).await;
     }

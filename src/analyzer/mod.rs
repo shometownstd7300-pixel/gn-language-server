@@ -50,7 +50,7 @@ mod utils;
 
 pub struct Analyzer {
     storage: Arc<Mutex<DocumentStorage>>,
-    workspaces: RwLock<BTreeMap<PathBuf, Arc<WorkspaceAnalyzer>>>,
+    workspaces: RwLock<BTreeMap<PathBuf, Arc<Mutex<WorkspaceAnalyzer>>>>,
 }
 
 impl Analyzer {
@@ -72,6 +72,8 @@ impl Analyzer {
         }
         Ok(self
             .workspace_for(path, finder)?
+            .lock()
+            .unwrap()
             .analyze(path, request_time))
     }
 
@@ -86,6 +88,8 @@ impl Analyzer {
         }
         Ok(self
             .workspace_for(path, finder)?
+            .lock()
+            .unwrap()
             .analyze_shallow(path, request_time))
     }
 
@@ -93,7 +97,8 @@ impl Analyzer {
         let Some(workspace) = self.workspaces.read().unwrap().get(workspace_root).cloned() else {
             return Vec::new();
         };
-        workspace.analyzer.get_shallow().cached_files()
+        let cached_files = workspace.lock().unwrap().analyzer.get_shallow().cached_files();
+        cached_files
     }
 
     pub fn workspace_roots(&self) -> Vec<PathBuf> {
@@ -104,7 +109,7 @@ impl Analyzer {
         &self,
         path: &Path,
         finder: &WorkspaceFinder,
-    ) -> Result<Arc<WorkspaceAnalyzer>> {
+    ) -> Result<Arc<Mutex<WorkspaceAnalyzer>>> {
         let workspace_root = finder
             .find_for(path)
             .ok_or(Error::General("Workspace not found".to_string()))?;
@@ -117,7 +122,7 @@ impl Analyzer {
         {
             let read_lock = self.workspaces.read().unwrap();
             if let Some(workspace) = read_lock.get(workspace_root) {
-                if workspace.context.dot_gn_version == dot_gn_version {
+                if workspace.lock().unwrap().context.dot_gn_version == dot_gn_version {
                     return Ok(workspace.clone());
                 }
             }
@@ -135,7 +140,7 @@ impl Analyzer {
             build_config,
         };
 
-        let workspace = Arc::new(WorkspaceAnalyzer::new(&context, &self.storage));
+        let workspace = Arc::new(Mutex::new(WorkspaceAnalyzer::new(&context, &self.storage)));
 
         let mut write_lock = self.workspaces.write().unwrap();
         Ok(write_lock
@@ -158,12 +163,12 @@ impl WorkspaceAnalyzer {
         }
     }
 
-    pub fn analyze(&self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
+    pub fn analyze(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
         self.analyzer.analyze(path, request_time)
     }
 
     pub fn analyze_shallow(
-        &self,
+        &mut self,
         path: &Path,
         request_time: Instant,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {

@@ -16,7 +16,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, OnceLock, RwLock},
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
@@ -49,8 +49,7 @@ pub type ShallowAnalysisSnapshot = HashMap<PathBuf, Pin<Arc<ShallowAnalyzedFile>
 pub struct ShallowAnalyzer {
     context: WorkspaceContext,
     storage: Arc<Mutex<DocumentStorage>>,
-    #[allow(clippy::type_complexity)]
-    cache: RwLock<BTreeMap<PathBuf, Arc<RwLock<OnceLock<Pin<Arc<ShallowAnalyzedFile>>>>>>>,
+    cache: BTreeMap<PathBuf, Pin<Arc<ShallowAnalyzedFile>>>,
 }
 
 impl ShallowAnalyzer {
@@ -63,31 +62,33 @@ impl ShallowAnalyzer {
     }
 
     pub fn cached_files(&self) -> Vec<Pin<Arc<ShallowAnalyzedFile>>> {
-        let entries: Vec<_> = self.cache.read().unwrap().values().cloned().collect();
-        entries
-            .into_iter()
-            .filter_map(|entry| {
-                if let Ok(once) = entry.try_read() {
-                    if let Some(cached_file) = once.get() {
-                        return Some(cached_file.clone());
-                    }
-                }
-                None
-            })
-            .collect()
+        self.cache.values().cloned().collect()
     }
 
     pub fn analyze(
-        &self,
+        &mut self,
         path: &Path,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
+        if snapshot.contains_key(path) {
+            return snapshot.get(path).unwrap().clone();
+        }
+
+        if let Some(cached_file) = self.cache.get(path) {
+            if cached_file
+                .node
+                .verify(request_time, &self.storage.lock().unwrap())
+            {
+                return cached_file.clone();
+            }
+        }
+
         self.analyze_cached(path, request_time, snapshot, &mut Vec::new())
     }
 
     fn analyze_cached(
-        &self,
+        &mut self,
         path: &Path,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
@@ -107,27 +108,13 @@ impl ShallowAnalyzer {
     }
 
     fn analyze_cached_inner(
-        &self,
+        &mut self,
         path: &Path,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
-        let entry = {
-            let read_lock = self.cache.read().unwrap();
-            if let Some(entry) = read_lock.get(path) {
-                entry.clone()
-            } else {
-                drop(read_lock);
-                let mut write_lock = self.cache.write().unwrap();
-                write_lock.entry(path.to_path_buf()).or_default().clone()
-            }
-        };
-
-        {
-            let read_lock = entry.read().unwrap();
-            let cached_file = read_lock
-                .get_or_init(|| self.analyze_uncached(path, request_time, snapshot, visiting));
+        if let Some(cached_file) = self.cache.get(path) {
             if cached_file
                 .node
                 .verify(request_time, &self.storage.lock().unwrap())
@@ -136,44 +123,26 @@ impl ShallowAnalyzer {
             }
         }
 
-        let mut write_lock = entry.write().unwrap();
-
-        let cached_file = write_lock
-            .get_or_init(|| self.analyze_uncached(path, request_time, snapshot, visiting));
-        if cached_file
-            .node
-            .verify(request_time, &self.storage.lock().unwrap())
-        {
-            return cached_file.clone();
-        }
-
-        *write_lock = Default::default();
-        let cached_file = write_lock
-            .get_or_init(|| self.analyze_uncached(path, request_time, snapshot, visiting));
-        if cached_file
-            .node
-            .verify(request_time, &self.storage.lock().unwrap())
-        {
-            return cached_file.clone();
-        }
-        unreachable!();
+        let new_file = self.analyze_uncached(path, request_time, snapshot, visiting);
+        self.cache.insert(path.to_path_buf(), new_file.clone());
+        new_file
     }
 
     fn analyze_uncached(
-        &self,
+        &mut self,
         path: &Path,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         visiting.push(path.to_path_buf());
-        let result = self.analyze_uncached_inner(path, request_time, snapshot, visiting);
+        let new_file = self.analyze_uncached_inner(path, request_time, snapshot, visiting);
         visiting.pop();
-        result
+        new_file
     }
 
     fn analyze_uncached_inner(
-        &self,
+        &mut self,
         path: &Path,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
@@ -208,7 +177,7 @@ impl ShallowAnalyzer {
 
     #[allow(clippy::too_many_arguments)]
     fn analyze_block<'i, 'p>(
-        &self,
+        &mut self,
         block: &'p Block<'i>,
         declare_args: bool,
         document: &'i Document,
