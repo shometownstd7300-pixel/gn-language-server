@@ -18,7 +18,7 @@ use either::Either;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
 
 use crate::{
-    analyzer::{AnalyzedBlock, AnalyzedStatement, Variable, VariableScope},
+    analyzer::{AnalyzedBlock, AnalyzedStatement, TopLevelStatementsExt, Variable, VariableScope},
     common::{builtins::BUILTINS, storage::Document},
     parser::{Expr, Identifier, LValue, PrimaryExpr},
 };

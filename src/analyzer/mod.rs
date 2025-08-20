@@ -26,6 +26,8 @@ pub use data::{
     Variable, VariableScope,
 };
 
+pub use toplevel::TopLevelStatementsExt;
+
 use crate::{
     analyzer::{
         data::WorkspaceContext, dotgn::evaluate_dot_gn, full::FullAnalyzer,
@@ -46,6 +48,7 @@ mod links;
 mod shallow;
 mod symbols;
 mod tests;
+mod toplevel;
 mod utils;
 
 pub struct Analyzer {
@@ -97,7 +100,12 @@ impl Analyzer {
         let Some(workspace) = self.workspaces.read().unwrap().get(workspace_root).cloned() else {
             return Vec::new();
         };
-        let cached_files = workspace.lock().unwrap().analyzer.get_shallow().cached_files();
+        let cached_files = workspace
+            .lock()
+            .unwrap()
+            .analyzer
+            .get_shallow()
+            .cached_files();
         cached_files
     }
 

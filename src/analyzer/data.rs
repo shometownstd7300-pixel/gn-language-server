@@ -25,7 +25,7 @@ use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
-    analyzer::{cache::AnalysisNode, utils::resolve_path},
+    analyzer::{cache::AnalysisNode, toplevel::TopLevelStatementsExt, utils::resolve_path},
     common::{
         storage::{Document, DocumentVersion},
         utils::parse_simple_literal,
@@ -258,10 +258,6 @@ pub struct AnalyzedBlock<'i, 'p> {
 }
 
 impl<'i, 'p> AnalyzedBlock<'i, 'p> {
-    pub fn top_level_statements<'a>(&'a self) -> TopLevelStatements<'i, 'p, 'a> {
-        TopLevelStatements::new(&self.statements)
-    }
-
     pub fn targets<'a>(&'a self) -> impl Iterator<Item = Target<'i, 'p>> + 'a {
         self.top_level_statements().filter_map(|event| match event {
             AnalyzedStatement::Target(target) => target.as_target(self.document),
@@ -396,68 +392,6 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
         }
 
         templates
-    }
-}
-
-pub struct TopLevelStatements<'i, 'p, 'a> {
-    stack: Vec<&'a AnalyzedStatement<'i, 'p>>,
-}
-
-impl<'i, 'p, 'a> TopLevelStatements<'i, 'p, 'a> {
-    pub fn new<I>(
-        events: impl IntoIterator<Item = &'a AnalyzedStatement<'i, 'p>, IntoIter = I>,
-    ) -> Self
-    where
-        I: DoubleEndedIterator<Item = &'a AnalyzedStatement<'i, 'p>>,
-    {
-        TopLevelStatements {
-            stack: events.into_iter().rev().collect(),
-        }
-    }
-}
-
-impl<'i, 'p, 'a> Iterator for TopLevelStatements<'i, 'p, 'a> {
-    type Item = &'a AnalyzedStatement<'i, 'p>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let statement = self.stack.pop()?;
-        match statement {
-            AnalyzedStatement::Conditions(condition) => {
-                let mut blocks = Vec::new();
-                let mut current_condition = condition;
-                loop {
-                    blocks.push(&current_condition.then_block);
-                    match &current_condition.else_block {
-                        Some(Either::Left(next_condition)) => {
-                            current_condition = next_condition;
-                        }
-                        Some(Either::Right(last_block)) => {
-                            blocks.push(last_block);
-                            break;
-                        }
-                        None => break,
-                    }
-                }
-                self.stack
-                    .extend(blocks.into_iter().flat_map(|block| &block.statements).rev());
-            }
-            AnalyzedStatement::DeclareArgs(declare_args) => {
-                self.stack
-                    .extend(declare_args.body_block.statements.iter().rev());
-            }
-            AnalyzedStatement::Foreach(foreach) => {
-                self.stack
-                    .extend(foreach.body_block.statements.iter().rev());
-            }
-            AnalyzedStatement::Assignment(_)
-            | AnalyzedStatement::Import(_)
-            | AnalyzedStatement::ForwardVariablesFrom(_)
-            | AnalyzedStatement::Template(_)
-            | AnalyzedStatement::Target(_)
-            | AnalyzedStatement::BuiltinCall(_)
-            | AnalyzedStatement::SyntheticImport(_) => {}
-        }
-        Some(statement)
     }
 }
 

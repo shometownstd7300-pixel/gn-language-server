@@ -30,6 +30,7 @@ use crate::{
             TemplateScope, Variable, VariableAssignment, VariableScope, WorkspaceContext,
         },
         links::collect_links,
+        toplevel::TopLevelStatementsExt,
         AnalyzedLink,
     },
     common::{
@@ -37,7 +38,7 @@ use crate::{
         storage::{Document, DocumentStorage},
         utils::parse_simple_literal,
     },
-    parser::{parse, Block, Comments, LValue, Statement},
+    parser::{parse, Block, Call, Comments, LValue, Node, Statement},
 };
 
 fn is_exported(name: &str) -> bool {
@@ -153,7 +154,6 @@ impl ShallowAnalyzer {
         let mut deps = Vec::new();
         let analyzed_root = self.analyze_block(
             &ast_root,
-            false,
             &document,
             request_time,
             snapshot,
@@ -179,7 +179,6 @@ impl ShallowAnalyzer {
     fn analyze_block<'i, 'p>(
         &mut self,
         block: &'p Block<'i>,
-        declare_args: bool,
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
@@ -190,7 +189,15 @@ impl ShallowAnalyzer {
         let mut templates = TemplateScope::new();
         let mut targets = TargetScope::new();
 
-        for statement in &block.statements {
+        let mut declare_args_stack: Vec<&Call> = Vec::new();
+
+        for statement in block.top_level_statements() {
+            while let Some(last_declare_args) = declare_args_stack.last() {
+                if statement.span().start_pos() <= last_declare_args.span.end_pos() {
+                    break;
+                }
+                declare_args_stack.pop();
+            }
             match statement {
                 Statement::Assignment(assignment) => {
                     let identifier = match &assignment.lvalue {
@@ -200,7 +207,9 @@ impl ShallowAnalyzer {
                     };
                     if is_exported(identifier.name) {
                         variables
-                            .ensure(identifier.name, || Variable::new(declare_args))
+                            .ensure(identifier.name, || {
+                                Variable::new(!declare_args_stack.is_empty())
+                            })
                             .assignments
                             .insert(
                                 PathSpan {
@@ -245,23 +254,10 @@ impl ShallowAnalyzer {
                             }
                         }
                     }
-                    DECLARE_ARGS | FOREACH => {
-                        if let Some(block) = &call.block {
-                            let analyzed_block = &self.analyze_block(
-                                block,
-                                declare_args || call.function.name == DECLARE_ARGS,
-                                document,
-                                request_time,
-                                snapshot,
-                                deps,
-                                visiting,
-                            );
-                            variables.merge(analyzed_block.variables.as_ref().clone());
-                            templates.merge(analyzed_block.templates.as_ref().clone());
-                            targets.merge(analyzed_block.targets.as_ref().clone());
-                        }
+                    DECLARE_ARGS => {
+                        declare_args_stack.push(call);
                     }
-                    SET_DEFAULTS => {}
+                    FOREACH | SET_DEFAULTS => {}
                     FORWARD_VARIABLES_FROM => {
                         if let Some(strings) = call
                             .args
@@ -278,7 +274,9 @@ impl ShallowAnalyzer {
                                 if let Some(name) = parse_simple_literal(string.raw_value) {
                                     if is_exported(name) {
                                         variables
-                                            .ensure(name, || Variable::new(declare_args))
+                                            .ensure(name, || {
+                                                Variable::new(!declare_args_stack.is_empty())
+                                            })
                                             .assignments
                                             .insert(
                                                 PathSpan {
@@ -311,46 +309,7 @@ impl ShallowAnalyzer {
                         }
                     }
                 },
-                Statement::Condition(condition) => {
-                    let mut current_condition = condition;
-                    loop {
-                        let analyzed_block = self.analyze_block(
-                            &current_condition.then_block,
-                            declare_args,
-                            document,
-                            request_time,
-                            snapshot,
-                            deps,
-                            visiting,
-                        );
-                        variables.merge(analyzed_block.variables.as_ref().clone());
-                        templates.merge(analyzed_block.templates.as_ref().clone());
-                        targets.merge(analyzed_block.targets.as_ref().clone());
-
-                        match &current_condition.else_block {
-                            None => break,
-                            Some(Either::Left(next_condition)) => {
-                                current_condition = next_condition;
-                            }
-                            Some(Either::Right(block)) => {
-                                let analyzed_block = self.analyze_block(
-                                    block,
-                                    declare_args,
-                                    document,
-                                    request_time,
-                                    snapshot,
-                                    deps,
-                                    visiting,
-                                );
-                                variables.merge(analyzed_block.variables.as_ref().clone());
-                                templates.merge(analyzed_block.templates.as_ref().clone());
-                                targets.merge(analyzed_block.targets.as_ref().clone());
-                                break;
-                            }
-                        }
-                    }
-                }
-                Statement::Error(_) => {}
+                Statement::Condition(_) | Statement::Error(_) => {}
             }
         }
 
