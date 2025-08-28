@@ -50,7 +50,7 @@ pub fn find_target<'a>(
     name: &str,
 ) -> Option<&'a Target<'static, 'static>> {
     let targets: Vec<_> = file
-        .analyzed_root
+        .environment
         .targets
         .locals()
         .values()

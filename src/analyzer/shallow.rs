@@ -26,8 +26,8 @@ use crate::{
     analyzer::{
         cache::AnalysisNode,
         data::{
-            PathSpan, ShallowAnalyzedBlock, ShallowAnalyzedFile, Target, TargetScope, Template,
-            TemplateScope, Variable, VariableAssignment, VariableScope, WorkspaceContext,
+            FileEnvironment, MutableFileEnvironment, PathSpan, ShallowAnalyzedFile, Target,
+            Template, Variable, VariableAssignment, WorkspaceContext,
         },
         links::collect_links,
         toplevel::TopLevelStatementsExt,
@@ -152,7 +152,7 @@ impl ShallowAnalyzer {
         let document = self.storage.lock().unwrap().read(path);
         let ast_root = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
-        let analyzed_root = self.analyze_block(
+        let environment = self.analyze_block(
             &ast_root,
             &document,
             request_time,
@@ -165,14 +165,13 @@ impl ShallowAnalyzer {
 
         // SAFETY: links' contents are backed by pinned document.
         let links = unsafe { std::mem::transmute::<Vec<AnalyzedLink>, Vec<AnalyzedLink>>(links) };
-        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
-        let analyzed_root = unsafe {
-            std::mem::transmute::<ShallowAnalyzedBlock, ShallowAnalyzedBlock>(analyzed_root)
-        };
+        // SAFETY: environment's contents are backed by pinned document and pinned ast_root.
+        let environment =
+            unsafe { std::mem::transmute::<FileEnvironment, FileEnvironment>(environment) };
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
 
-        ShallowAnalyzedFile::new(document, ast_root, analyzed_root, links, deps, request_time)
+        ShallowAnalyzedFile::new(document, ast_root, environment, links, deps, request_time)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -184,11 +183,8 @@ impl ShallowAnalyzer {
         snapshot: &mut ShallowAnalysisSnapshot,
         deps: &mut Vec<Arc<AnalysisNode>>,
         visiting: &mut Vec<PathBuf>,
-    ) -> ShallowAnalyzedBlock<'i, 'p> {
-        let mut variables = VariableScope::new();
-        let mut templates = TemplateScope::new();
-        let mut targets = TargetScope::new();
-
+    ) -> FileEnvironment<'i, 'p> {
+        let mut environment = MutableFileEnvironment::new();
         let mut declare_args_stack: Vec<&Call> = Vec::new();
 
         for statement in block.top_level_statements() {
@@ -206,7 +202,8 @@ impl ShallowAnalyzer {
                         LValue::ScopeAccess(scope_access) => &scope_access.scope,
                     };
                     if is_exported(identifier.name) {
-                        variables
+                        environment
+                            .variables
                             .ensure(identifier.name, || {
                                 Variable::new(!declare_args_stack.is_empty())
                             })
@@ -233,8 +230,7 @@ impl ShallowAnalyzer {
                                 .context
                                 .resolve_path(name, document.path.parent().unwrap());
                             let file = self.analyze_cached(&path, request_time, snapshot, visiting);
-                            variables.import(&file.analyzed_root.variables);
-                            templates.import(&file.analyzed_root.templates);
+                            environment.import(&file.environment);
                             deps.push(file.node.clone());
                         }
                     }
@@ -242,7 +238,7 @@ impl ShallowAnalyzer {
                         if let Some(name) = call.only_arg().and_then(|expr| expr.as_simple_string())
                         {
                             if is_exported(name) {
-                                templates.insert(
+                                environment.templates.insert(
                                     name,
                                     Template {
                                         document,
@@ -273,7 +269,8 @@ impl ShallowAnalyzer {
                             for string in strings {
                                 if let Some(name) = parse_simple_literal(string.raw_value) {
                                     if is_exported(name) {
-                                        variables
+                                        environment
+                                            .variables
                                             .ensure(name, || {
                                                 Variable::new(!declare_args_stack.is_empty())
                                             })
@@ -298,7 +295,7 @@ impl ShallowAnalyzer {
                     _ => {
                         if let Some(name) = call.only_arg().and_then(|expr| expr.as_simple_string())
                         {
-                            targets.insert(
+                            environment.targets.insert(
                                 name,
                                 Target {
                                     document,
@@ -313,10 +310,6 @@ impl ShallowAnalyzer {
             }
         }
 
-        ShallowAnalyzedBlock {
-            variables: Arc::new(variables),
-            templates: Arc::new(templates),
-            targets: Arc::new(targets),
-        }
+        environment.finalize()
     }
 }

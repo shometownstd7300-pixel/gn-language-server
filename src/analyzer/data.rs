@@ -135,9 +135,9 @@ where
 
 pub struct ShallowAnalyzedFile {
     pub document: Pin<Arc<Document>>,
-    #[allow(unused)] // Backing analyzed_root
+    #[allow(unused)] // Backing environment
     pub ast_root: Pin<Box<Block<'static>>>,
-    pub analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
+    pub environment: FileEnvironment<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub node: Arc<AnalysisNode>,
 }
@@ -146,7 +146,7 @@ impl ShallowAnalyzedFile {
     pub fn new(
         document: Pin<Arc<Document>>,
         ast_root: Pin<Box<Block<'static>>>,
-        analyzed_root: ShallowAnalyzedBlock<'static, 'static>,
+        environment: FileEnvironment<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
         deps: Vec<Arc<AnalysisNode>>,
         request_time: Instant,
@@ -160,7 +160,7 @@ impl ShallowAnalyzedFile {
         Arc::pin(Self {
             document,
             ast_root,
-            analyzed_root,
+            environment,
             links,
             node,
         })
@@ -169,17 +169,16 @@ impl ShallowAnalyzedFile {
     pub fn error(path: &Path, request_time: Instant) -> Pin<Arc<Self>> {
         let document = Arc::pin(Document::analysis_error(path));
         let ast_root = Box::pin(parse(&document.data));
-        let analyzed_root = ShallowAnalyzedBlock::new_top_level();
+        let environment = FileEnvironment::new();
         // SAFETY: ast_root's contents are backed by pinned document.
         let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
-        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
-        let analyzed_root = unsafe {
-            std::mem::transmute::<ShallowAnalyzedBlock, ShallowAnalyzedBlock>(analyzed_root)
-        };
+        // SAFETY: environment's contents are backed by pinned document and pinned ast_root.
+        let environment =
+            unsafe { std::mem::transmute::<FileEnvironment, FileEnvironment>(environment) };
         Self::new(
             document,
             ast_root,
-            analyzed_root,
+            environment,
             Vec::new(),
             Vec::new(),
             request_time,
@@ -188,14 +187,43 @@ impl ShallowAnalyzedFile {
 }
 
 #[derive(Default)]
-pub struct ShallowAnalyzedBlock<'i, 'p> {
+pub struct MutableFileEnvironment<'i, 'p> {
+    pub variables: VariableScope<'i, 'p>,
+    pub templates: TemplateScope<'i, 'p>,
+    pub targets: TargetScope<'i, 'p>,
+}
+
+impl MutableFileEnvironment<'_, '_> {
+    pub fn new() -> Self {
+        Default::default()
+    }
+}
+
+impl<'i, 'p> MutableFileEnvironment<'i, 'p> {
+    pub fn import(&mut self, env: &FileEnvironment<'i, 'p>) {
+        self.variables.import(&env.variables);
+        self.templates.import(&env.templates);
+        self.targets.import(&env.targets);
+    }
+
+    pub fn finalize(self) -> FileEnvironment<'i, 'p> {
+        FileEnvironment {
+            variables: Arc::new(self.variables),
+            templates: Arc::new(self.templates),
+            targets: Arc::new(self.targets),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct FileEnvironment<'i, 'p> {
     pub variables: Arc<VariableScope<'i, 'p>>,
     pub templates: Arc<TemplateScope<'i, 'p>>,
     pub targets: Arc<TargetScope<'i, 'p>>,
 }
 
-impl ShallowAnalyzedBlock<'_, '_> {
-    pub fn new_top_level() -> Self {
+impl FileEnvironment<'_, '_> {
+    pub fn new() -> Self {
         Default::default()
     }
 }
@@ -326,10 +354,10 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                 }
                 AnalyzedStatement::Import(import) => {
                     // TODO: Handle import() within declare_args.
-                    variables.import(&import.file.analyzed_root.variables);
+                    variables.import(&import.file.environment.variables);
                 }
                 AnalyzedStatement::SyntheticImport(import) => {
-                    variables.import(&import.file.analyzed_root.variables);
+                    variables.import(&import.file.environment.variables);
                 }
                 AnalyzedStatement::DeclareArgs(declare_args) => {
                     declare_args_stack.push(declare_args);
@@ -366,10 +394,10 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                     }
                 }
                 AnalyzedStatement::Import(import) => {
-                    templates.import(&import.file.analyzed_root.templates);
+                    templates.import(&import.file.environment.templates);
                 }
                 AnalyzedStatement::SyntheticImport(import) => {
-                    templates.import(&import.file.analyzed_root.templates);
+                    templates.import(&import.file.environment.templates);
                 }
                 AnalyzedStatement::Assignment(_)
                 | AnalyzedStatement::Conditions(_)
