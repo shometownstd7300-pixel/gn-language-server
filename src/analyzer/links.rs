@@ -48,12 +48,11 @@ fn resolve_target<'s>(
 }
 
 pub fn collect_links<'i>(
-    ast_root: &Block<'i>,
+    ast: &Block<'i>,
     path: &Path,
     workspace: &WorkspaceContext,
 ) -> Vec<AnalyzedLink<'i>> {
-    ast_root
-        .strings()
+    ast.strings()
         .filter_map(|string| {
             let content = parse_simple_literal(string.raw_value)?;
             if !content.contains(":") && content.contains(".") {

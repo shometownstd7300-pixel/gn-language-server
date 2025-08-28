@@ -150,28 +150,22 @@ impl ShallowAnalyzer {
         visiting: &mut Vec<PathBuf>,
     ) -> Pin<Arc<ShallowAnalyzedFile>> {
         let document = self.storage.lock().unwrap().read(path);
-        let ast_root = Box::pin(parse(&document.data));
+        let ast = Box::pin(parse(&document.data));
         let mut deps = Vec::new();
-        let environment = self.analyze_block(
-            &ast_root,
-            &document,
-            request_time,
-            snapshot,
-            &mut deps,
-            visiting,
-        );
+        let environment =
+            self.analyze_block(&ast, &document, request_time, snapshot, &mut deps, visiting);
 
-        let links = collect_links(&ast_root, path, &self.context);
+        let links = collect_links(&ast, path, &self.context);
 
         // SAFETY: links' contents are backed by pinned document.
         let links = unsafe { std::mem::transmute::<Vec<AnalyzedLink>, Vec<AnalyzedLink>>(links) };
-        // SAFETY: environment's contents are backed by pinned document and pinned ast_root.
+        // SAFETY: environment's contents are backed by pinned document and pinned ast.
         let environment =
             unsafe { std::mem::transmute::<FileEnvironment, FileEnvironment>(environment) };
-        // SAFETY: ast_root's contents are backed by pinned document.
-        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
+        // SAFETY: ast's contents are backed by pinned document.
+        let ast = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast) };
 
-        ShallowAnalyzedFile::new(document, ast_root, environment, links, deps, request_time)
+        ShallowAnalyzedFile::new(document, ast, environment, links, deps, request_time)
     }
 
     #[allow(clippy::too_many_arguments)]

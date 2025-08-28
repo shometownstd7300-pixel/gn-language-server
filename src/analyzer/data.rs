@@ -136,7 +136,7 @@ where
 pub struct ShallowAnalyzedFile {
     pub document: Pin<Arc<Document>>,
     #[allow(unused)] // Backing environment
-    pub ast_root: Pin<Box<Block<'static>>>,
+    pub ast: Pin<Box<Block<'static>>>,
     pub environment: FileEnvironment<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub node: Arc<AnalysisNode>,
@@ -145,7 +145,7 @@ pub struct ShallowAnalyzedFile {
 impl ShallowAnalyzedFile {
     pub fn new(
         document: Pin<Arc<Document>>,
-        ast_root: Pin<Box<Block<'static>>>,
+        ast: Pin<Box<Block<'static>>>,
         environment: FileEnvironment<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
         deps: Vec<Arc<AnalysisNode>>,
@@ -159,7 +159,7 @@ impl ShallowAnalyzedFile {
         ));
         Arc::pin(Self {
             document,
-            ast_root,
+            ast,
             environment,
             links,
             node,
@@ -168,16 +168,16 @@ impl ShallowAnalyzedFile {
 
     pub fn error(path: &Path, request_time: Instant) -> Pin<Arc<Self>> {
         let document = Arc::pin(Document::analysis_error(path));
-        let ast_root = Box::pin(parse(&document.data));
+        let ast = Box::pin(parse(&document.data));
         let environment = FileEnvironment::new();
-        // SAFETY: ast_root's contents are backed by pinned document.
-        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
-        // SAFETY: environment's contents are backed by pinned document and pinned ast_root.
+        // SAFETY: ast's contents are backed by pinned document.
+        let ast = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast) };
+        // SAFETY: environment's contents are backed by pinned document and pinned ast.
         let environment =
             unsafe { std::mem::transmute::<FileEnvironment, FileEnvironment>(environment) };
         Self::new(
             document,
-            ast_root,
+            ast,
             environment,
             Vec::new(),
             Vec::new(),
@@ -231,7 +231,7 @@ impl FileEnvironment<'_, '_> {
 pub struct AnalyzedFile {
     pub document: Pin<Arc<Document>>,
     pub workspace_root: PathBuf,
-    pub ast_root: Pin<Box<Block<'static>>>,
+    pub ast: Pin<Box<Block<'static>>>,
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub symbols: Vec<DocumentSymbol>,
@@ -243,7 +243,7 @@ impl AnalyzedFile {
     pub fn new(
         document: Pin<Arc<Document>>,
         workspace_root: PathBuf,
-        ast_root: Pin<Box<Block<'static>>>,
+        ast: Pin<Box<Block<'static>>>,
         analyzed_root: AnalyzedBlock<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
         symbols: Vec<DocumentSymbol>,
@@ -260,7 +260,7 @@ impl AnalyzedFile {
         Arc::pin(Self {
             document,
             workspace_root,
-            ast_root,
+            ast,
             analyzed_root,
             links,
             symbols,

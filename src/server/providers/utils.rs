@@ -33,7 +33,7 @@ pub fn get_text_document_path(text_document: &TextDocumentIdentifier) -> Result<
 
 pub fn lookup_identifier_at(file: &AnalyzedFile, position: Position) -> Option<&Identifier> {
     let offset = file.document.line_index.offset(position)?;
-    file.ast_root
+    file.ast
         .identifiers()
         .find(|ident| ident.span.start() <= offset && offset <= ident.span.end())
 }
