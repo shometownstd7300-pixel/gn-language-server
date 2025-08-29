@@ -24,7 +24,7 @@ use either::Either;
 
 use crate::{
     analyzer::{
-        cache::AnalysisNode,
+        cache::CacheNode,
         data::{
             FileEnvironment, MutableFileEnvironment, PathSpan, ShallowAnalyzedFile, Target,
             Template, Variable, VariableAssignment, WorkspaceContext,
@@ -175,7 +175,7 @@ impl ShallowAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
         visiting: &mut Vec<PathBuf>,
     ) -> FileEnvironment<'i, 'p> {
         let mut environment = MutableFileEnvironment::new();

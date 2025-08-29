@@ -25,7 +25,7 @@ use pest::Span;
 
 use crate::{
     analyzer::{
-        cache::AnalysisNode,
+        cache::CacheNode,
         data::{
             AnalyzedBuiltinCall, AnalyzedCondition, AnalyzedDeclareArgs, AnalyzedForeach,
             AnalyzedForwardVariablesFrom, AnalyzedStatement, SyntheticImport,
@@ -135,7 +135,7 @@ impl FullAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
     ) -> AnalyzedBlock<'i, 'p> {
         let mut statements: Vec<AnalyzedStatement> = Vec::new();
 
@@ -204,7 +204,7 @@ impl FullAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
     ) -> AnalyzedStatement<'i, 'p> {
         let body_block = call
             .block
@@ -323,7 +323,7 @@ impl FullAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
     ) -> AnalyzedCondition<'i, 'p> {
         let expr_scopes =
             self.analyze_expr(&condition.condition, document, request_time, snapshot, deps);
@@ -358,7 +358,7 @@ impl FullAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
     ) -> Vec<AnalyzedBlock<'i, 'p>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {

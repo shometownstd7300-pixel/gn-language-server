@@ -25,7 +25,7 @@ use pest::Span;
 use tower_lsp::lsp_types::DocumentSymbol;
 
 use crate::{
-    analyzer::{cache::AnalysisNode, toplevel::TopLevelStatementsExt, utils::resolve_path},
+    analyzer::{cache::CacheNode, toplevel::TopLevelStatementsExt, utils::resolve_path},
     common::{
         storage::{Document, DocumentVersion},
         utils::parse_simple_literal,
@@ -139,7 +139,7 @@ pub struct ShallowAnalyzedFile {
     pub ast: Pin<Box<Block<'static>>>,
     pub environment: FileEnvironment<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
-    pub node: Arc<AnalysisNode>,
+    pub node: Arc<CacheNode>,
 }
 
 impl ShallowAnalyzedFile {
@@ -148,15 +148,10 @@ impl ShallowAnalyzedFile {
         ast: Pin<Box<Block<'static>>>,
         environment: FileEnvironment<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
-        deps: Vec<Arc<AnalysisNode>>,
+        deps: Vec<Arc<CacheNode>>,
         request_time: Instant,
     ) -> Pin<Arc<Self>> {
-        let node = Arc::new(AnalysisNode::new(
-            document.path.clone(),
-            document.version,
-            deps,
-            request_time,
-        ));
+        let node = CacheNode::new(document.path.clone(), document.version, deps, request_time);
         Arc::pin(Self {
             document,
             ast,
@@ -235,7 +230,7 @@ pub struct AnalyzedFile {
     pub analyzed_root: AnalyzedBlock<'static, 'static>,
     pub links: Vec<AnalyzedLink<'static>>,
     pub symbols: Vec<DocumentSymbol>,
-    pub node: Arc<AnalysisNode>,
+    pub node: Arc<CacheNode>,
 }
 
 impl AnalyzedFile {
@@ -247,16 +242,10 @@ impl AnalyzedFile {
         analyzed_root: AnalyzedBlock<'static, 'static>,
         links: Vec<AnalyzedLink<'static>>,
         symbols: Vec<DocumentSymbol>,
-        deps: Vec<Arc<AnalysisNode>>,
+        deps: Vec<Arc<CacheNode>>,
         request_time: Instant,
     ) -> Pin<Arc<Self>> {
-        let node = Arc::new(AnalysisNode::new(
-            document.path.clone(),
-            document.version,
-            deps,
-            request_time,
-        ));
-
+        let node = CacheNode::new(document.path.clone(), document.version, deps, request_time);
         Arc::pin(Self {
             document,
             workspace_root,

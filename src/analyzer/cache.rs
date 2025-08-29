@@ -37,28 +37,28 @@ enum CacheState {
     Fresh { expires: Instant },
 }
 
-pub struct AnalysisNode {
+pub struct CacheNode {
     path: PathBuf,
     version: DocumentVersion,
-    deps: Vec<Arc<AnalysisNode>>,
+    deps: Vec<Arc<CacheNode>>,
     state: RwLock<CacheState>,
 }
 
-impl AnalysisNode {
+impl CacheNode {
     pub fn new(
         path: PathBuf,
         version: DocumentVersion,
-        deps: Vec<Arc<AnalysisNode>>,
+        deps: Vec<Arc<CacheNode>>,
         request_time: Instant,
-    ) -> Self {
-        Self {
+    ) -> Arc<Self> {
+        Arc::new(Self {
             path,
             version,
             deps,
             state: RwLock::new(CacheState::Fresh {
                 expires: compute_next_verify(request_time, version),
             }),
-        }
+        })
     }
 
     pub fn verify(&self, request_time: Instant, storage: &DocumentStorage) -> bool {
