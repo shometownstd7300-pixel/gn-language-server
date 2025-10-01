@@ -78,11 +78,6 @@
           "default": true,
           "description": "Reports syntax errors."
         },
-        "gn.experimental.parallelIndexing": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enables parallel indexing (experimental)."
-        },
         "gn.experimental.undefinedVariableAnalysis": {
           "type": "boolean",
           "default": false,
