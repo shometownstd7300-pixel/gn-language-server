@@ -25,7 +25,7 @@ use pest::Span;
 
 use crate::{
     analyzer::{
-        cache::AnalysisNode,
+        cache::CacheNode,
         data::{
             AnalyzedBuiltinCall, AnalyzedCondition, AnalyzedDeclareArgs, AnalyzedForeach,
             AnalyzedForwardVariablesFrom, AnalyzedStatement, SyntheticImport,
@@ -86,12 +86,12 @@ impl FullAnalyzer {
 
     fn analyze_uncached(&mut self, path: &Path, request_time: Instant) -> Pin<Arc<AnalyzedFile>> {
         let document = self.storage.lock().unwrap().read(path);
-        let ast_root = Box::pin(parse(&document.data));
+        let ast = Box::pin(parse(&document.data));
 
         let mut deps = Vec::new();
         let mut snapshot = ShallowAnalysisSnapshot::new();
         let mut analyzed_root =
-            self.analyze_block(&ast_root, &document, request_time, &mut snapshot, &mut deps);
+            self.analyze_block(&ast, &document, request_time, &mut snapshot, &mut deps);
 
         // Insert a synthetic import of BUILDCONFIG.gn.
         let dot_gn_file =
@@ -106,21 +106,21 @@ impl FullAnalyzer {
         );
         deps.push(dot_gn_file.node.clone());
 
-        let links = collect_links(&ast_root, path, &self.context);
-        let symbols = collect_symbols(ast_root.as_node(), &document.line_index);
+        let links = collect_links(&ast, path, &self.context);
+        let symbols = collect_symbols(ast.as_node(), &document.line_index);
 
         // SAFETY: links' contents are backed by pinned document.
         let links = unsafe { std::mem::transmute::<Vec<AnalyzedLink>, Vec<AnalyzedLink>>(links) };
-        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast_root.
+        // SAFETY: analyzed_root's contents are backed by pinned document and pinned ast.
         let analyzed_root =
             unsafe { std::mem::transmute::<AnalyzedBlock, AnalyzedBlock>(analyzed_root) };
-        // SAFETY: ast_root's contents are backed by pinned document.
-        let ast_root = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast_root) };
+        // SAFETY: ast's contents are backed by pinned document.
+        let ast = unsafe { std::mem::transmute::<Pin<Box<Block>>, Pin<Box<Block>>>(ast) };
 
         AnalyzedFile::new(
             document,
             self.context.root.clone(),
-            ast_root,
+            ast,
             analyzed_root,
             links,
             symbols,
@@ -135,7 +135,7 @@ impl FullAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
     ) -> AnalyzedBlock<'i, 'p> {
         let mut statements: Vec<AnalyzedStatement> = Vec::new();
 
@@ -204,7 +204,7 @@ impl FullAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
     ) -> AnalyzedStatement<'i, 'p> {
         let body_block = call
             .block
@@ -323,7 +323,7 @@ impl FullAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
     ) -> AnalyzedCondition<'i, 'p> {
         let expr_scopes =
             self.analyze_expr(&condition.condition, document, request_time, snapshot, deps);
@@ -358,7 +358,7 @@ impl FullAnalyzer {
         document: &'i Document,
         request_time: Instant,
         snapshot: &mut ShallowAnalysisSnapshot,
-        deps: &mut Vec<Arc<AnalysisNode>>,
+        deps: &mut Vec<Arc<CacheNode>>,
     ) -> Vec<AnalyzedBlock<'i, 'p>> {
         match expr {
             Expr::Primary(primary_expr) => match primary_expr.as_ref() {

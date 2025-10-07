@@ -30,9 +30,8 @@ use crate::{
     },
 };
 
-fn get_prefix_string_for_completion<'i>(ast_root: &Block<'i>, offset: usize) -> Option<&'i str> {
-    ast_root
-        .walk()
+fn get_prefix_string_for_completion<'i>(ast: &Block<'i>, offset: usize) -> Option<&'i str> {
+    ast.walk()
         .filter_map(|node| {
             if let Some(string) = node.as_string() {
                 if string.span.start() < offset && offset < string.span.end() {
@@ -185,7 +184,7 @@ pub async fn completion(
         .unwrap_or(0);
 
     // Handle string completions.
-    if let Some(prefix) = get_prefix_string_for_completion(&current_file.ast_root, offset) {
+    if let Some(prefix) = get_prefix_string_for_completion(&current_file.ast, offset) {
         // Target completions are not supported yet.
         if prefix.starts_with('/')
             || prefix.starts_with(':')

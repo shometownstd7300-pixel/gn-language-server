@@ -275,10 +275,10 @@ impl<'i, 'p> AnalyzedBlock<'i, 'p> {
                     }
                 }
                 AnalyzedStatement::Import(import) => {
-                    tracker.import(&import.file.analyzed_root.variables);
+                    tracker.import(&import.file.environment.variables);
                 }
                 AnalyzedStatement::SyntheticImport(synthetic_import) => {
-                    tracker.import(&synthetic_import.file.analyzed_root.variables);
+                    tracker.import(&synthetic_import.file.environment.variables);
                 }
                 AnalyzedStatement::Conditions(_)
                 | AnalyzedStatement::DeclareArgs(_)

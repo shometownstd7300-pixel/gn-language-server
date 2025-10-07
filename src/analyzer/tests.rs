@@ -41,7 +41,7 @@ fn test_analyze_smoke() {
 
     // No parse error.
     assert!(file
-        .ast_root
+        .ast
         .statements
         .iter()
         .all(|s| !matches!(s, Statement::Error(_))));

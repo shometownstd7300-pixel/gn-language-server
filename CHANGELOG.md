@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.0 (2025-10-01)
+
+- Workaround for "cycle detected" problem (#49)
+- Experimental support of workspace symbols (behind an experimental setting)
+- Experimental support of undefined variable analysis (behind an experimental setting)
+- A lot of internal rework of the analysis mechanism
+
 ## 1.6.0 (2025-08-06)
 
 - Support completing file names (#6)
